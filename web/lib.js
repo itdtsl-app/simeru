@@ -135,6 +135,80 @@
     return area.start_hour * 60 + idx * area.slot_minutes;
   }
 
+
+  // ---- kalender mini --------------------------------------------------------
+  var DAY_ABBR = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+
+  // Matriks minggu (Minggu = kolom pertama). Sel berisi nomor hari atau null.
+  function monthMatrix(year, month) {
+    var lead = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+    var days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    var cells = [];
+    var i;
+    for (i = 0; i < lead; i++) { cells.push(null); }
+    for (i = 1; i <= days; i++) { cells.push(i); }
+    while (cells.length % 7 !== 0) { cells.push(null); }
+    var weeks = [];
+    for (i = 0; i < cells.length; i += 7) { weeks.push(cells.slice(i, i + 7)); }
+    return weeks;
+  }
+
+  function monthTitle(year, month) { return MONTHS[month - 1] + ' ' + year; }
+
+  function firstOfMonth(s) { return s.slice(0, 7) + '-01'; }
+
+  function lastOfMonth(s) {
+    var d = parseDate(s);
+    return fmtDate(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)));
+  }
+
+  // geser n bulan; hari dibatasi ke akhir bulan tujuan (31 Jan + 1 bulan = 28/29 Feb)
+  function shiftMonth(s, n) {
+    var d = parseDate(s);
+    var y = d.getUTCFullYear(), m = d.getUTCMonth() + n;
+    var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    return fmtDate(new Date(Date.UTC(y, m, Math.min(d.getUTCDate(), last))));
+  }
+
+  // ---- pencarian & laporan --------------------------------------------------
+  // escape karakter khusus pola ILIKE (% _ \)
+  function escapeLike(s) { return String(s).replace(/[\\%_]/g, '\\$&'); }
+
+  // menit jadwal yang jatuh di dalam rentang [fromMs, toMs)
+  function clippedMinutes(startMs, endMs, fromMs, toMs) {
+    return Math.max(0, Math.min(endMs, toMs) - Math.max(startMs, fromMs)) / 60000;
+  }
+
+  function formatHours(minutes) { return (minutes / 60).toFixed(1).replace('.', ','); }
+
+  // Ringkasan per ruangan: jumlah acara dan total menit (dipotong ke rentang laporan)
+  function summarizeByRoom(rows, fromMs, toMs) {
+    var map = {}, order = [];
+    rows.forEach(function (e) {
+      var k = String(e.room_id);
+      if (!map[k]) {
+        map[k] = { room_id: e.room_id, room_name: e.room_name || '', area_name: e.area_name || '', count: 0, minutes: 0 };
+        order.push(k);
+      }
+      map[k].count += 1;
+      map[k].minutes += clippedMinutes(Date.parse(e.start_time), Date.parse(e.end_time), fromMs, toMs);
+    });
+    var list = order.map(function (k) { return map[k]; });
+    list.sort(function (a, b) {
+      return a.area_name.localeCompare(b.area_name) || a.room_name.localeCompare(b.room_name);
+    });
+    return list;
+  }
+
+  // satu sel CSV: kutip bila perlu, dan cegah "formula injection" di Excel/Sheets
+  function csvCell(v) {
+    var s = (v === null || v === undefined) ? '' : String(v);
+    if (/^[=+\-@\t\r]/.test(s)) { s = "'" + s; }
+    return /[;,"\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function csvLine(cells, sep) { return cells.map(csvCell).join(sep || ';'); }
+
   return {
     TYPE_COLORS: TYPE_COLORS, TYPE_LABELS: TYPE_LABELS, PALETTE: PALETTE,
     pad: pad, parseDate: parseDate, fmtDate: fmtDate, addDays: addDays,
@@ -142,6 +216,9 @@
     msToTime: msToTime, msToDate: msToDate, minutesToTime: minutesToTime,
     longDate: longDate, shortDate: shortDate,
     sanitizeColor: sanitizeColor, contrastText: contrastText, entryColor: entryColor,
-    layout: layout, slotCount: slotCount, minutesFromOffset: minutesFromOffset
+    layout: layout, slotCount: slotCount, minutesFromOffset: minutesFromOffset,
+    DAY_ABBR: DAY_ABBR, monthMatrix: monthMatrix, monthTitle: monthTitle, firstOfMonth: firstOfMonth,
+    lastOfMonth: lastOfMonth, shiftMonth: shiftMonth, escapeLike: escapeLike, clippedMinutes: clippedMinutes,
+    formatHours: formatHours, summarizeByRoom: summarizeByRoom, csvCell: csvCell, csvLine: csvLine
   };
 });

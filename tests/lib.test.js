@@ -56,4 +56,54 @@ assert.strictEqual(L.minutesFromOffset(22 * 3 + 5, 22, area), 8 * 60 + 30);
 assert.strictEqual(L.minutesFromOffset(99999, 22, area), 18 * 60 + 30);   // slot terakhir
 assert.strictEqual(L.minutesToTime(8 * 60 + 30), '08:30');
 
+// --- kalender mini (Nov 2026 mulai hari Minggu, Okt 2026 mulai hari Kamis, sesuai tampilan MRBS)
+let w = L.monthMatrix(2026, 11);
+assert.deepStrictEqual(w[0], [1, 2, 3, 4, 5, 6, 7]);
+assert.deepStrictEqual(w[4], [29, 30, null, null, null, null, null]);
+assert.strictEqual(w.length, 5);
+w = L.monthMatrix(2026, 10);
+assert.deepStrictEqual(w[0], [null, null, null, null, 1, 2, 3]);
+assert.deepStrictEqual(w[4], [25, 26, 27, 28, 29, 30, 31]);
+assert.strictEqual(L.monthMatrix(2026, 2).length, 4);                 // Feb 2026: tepat 4 minggu
+assert.strictEqual(L.monthMatrix(2028, 2).flat().filter(Boolean).length, 29);   // kabisat
+assert.strictEqual(L.monthTitle(2026, 11), 'November 2026');
+assert.strictEqual(L.firstOfMonth('2026-11-27'), '2026-11-01');
+assert.strictEqual(L.lastOfMonth('2026-11-27'), '2026-11-30');
+assert.strictEqual(L.lastOfMonth('2028-02-10'), '2028-02-29');
+assert.strictEqual(L.shiftMonth('2026-01-31', 1), '2026-02-28');      // dibatasi akhir bulan
+assert.strictEqual(L.shiftMonth('2026-11-27', 1), '2026-12-27');
+assert.strictEqual(L.shiftMonth('2026-01-15', -1), '2025-12-15');
+assert.strictEqual(L.shiftMonth('2026-12-15', 2), '2027-02-15');
+
+// --- pencarian
+assert.strictEqual(L.escapeLike('100%_a\\b'), '100\\%\\_a\\\\b');
+
+// --- laporan
+const f = Date.parse('2026-11-01T00:00:00+07:00'), t2 = Date.parse('2026-12-01T00:00:00+07:00');
+assert.strictEqual(L.clippedMinutes(Date.parse('2026-11-05T08:00:00+07:00'), Date.parse('2026-11-05T10:30:00+07:00'), f, t2), 150);
+assert.strictEqual(L.clippedMinutes(Date.parse('2026-10-31T22:00:00+07:00'), Date.parse('2026-11-01T02:00:00+07:00'), f, t2), 120);   // dipotong awal
+assert.strictEqual(L.clippedMinutes(Date.parse('2026-11-30T23:00:00+07:00'), Date.parse('2026-12-01T05:00:00+07:00'), f, t2), 60);    // dipotong akhir
+assert.strictEqual(L.clippedMinutes(Date.parse('2026-12-02T08:00:00+07:00'), Date.parse('2026-12-02T09:00:00+07:00'), f, t2), 0);
+assert.strictEqual(L.formatHours(150), '2,5');
+assert.strictEqual(L.formatHours(0), '0,0');
+const sum = L.summarizeByRoom([
+  { room_id: 2, room_name: 'B', area_name: 'Z', start_time: '2026-11-05T01:00:00Z', end_time: '2026-11-05T03:00:00Z' },
+  { room_id: 1, room_name: 'A', area_name: 'Z', start_time: '2026-11-06T01:00:00Z', end_time: '2026-11-06T02:00:00Z' },
+  { room_id: 1, room_name: 'A', area_name: 'Z', start_time: '2026-11-07T01:00:00Z', end_time: '2026-11-07T02:30:00Z' },
+  { room_id: 3, room_name: 'C', area_name: 'A', start_time: '2026-11-08T01:00:00Z', end_time: '2026-11-08T02:00:00Z' }
+], f, t2);
+assert.deepStrictEqual(sum.map((r) => [r.area_name, r.room_name, r.count, r.minutes]),
+  [['A', 'C', 1, 60], ['Z', 'A', 2, 150], ['Z', 'B', 1, 120]]);        // urut area lalu ruangan
+
+// --- CSV
+assert.strictEqual(L.csvCell('biasa'), 'biasa');
+assert.strictEqual(L.csvCell('a;b'), '"a;b"');
+assert.strictEqual(L.csvCell('kata "kutip"'), '"kata ""kutip"""');
+assert.strictEqual(L.csvCell('baris1\nbaris2'), '"baris1\nbaris2"');
+assert.strictEqual(L.csvCell(null), '');
+assert.strictEqual(L.csvCell('=HYPERLINK("http://x")'), '"\'=HYPERLINK(""http://x"")"');   // formula dinetralkan
+assert.strictEqual(L.csvCell('+62812'), "'+62812");
+assert.strictEqual(L.csvCell('2026-11-27'), '2026-11-27');                                // tanggal tidak diubah
+assert.strictEqual(L.csvLine(['a', 'b;c', 3]), 'a;"b;c";3');
+
 console.log('lib.test.js: semua tes lulus');

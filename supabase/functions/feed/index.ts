@@ -7,13 +7,14 @@
 //
 // Deploy (tanpa login JWT, karena feed bersifat publik seperti tampilan kalender):
 //   supabase functions deploy feed --no-verify-jwt
-// Variabel opsional (supabase secrets set ...):  SITE_URL, TZ_OFFSET
+// Variabel opsional (supabase secrets set ...):  SITE_URL, TZ_OFFSET, APP_TITLE
 //
 // Data dibaca dengan anon key, jadi tunduk pada RLS: bila policy "entries_read" dibatasi
 // hanya untuk pengguna login, feed ini ikut kosong.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
 const TZ_OFFSET = Deno.env.get("TZ_OFFSET") ?? "+07:00";
+const APP_TITLE = Deno.env.get("APP_TITLE") ?? "SIMERU DTSL";
 const SITE_URL = (Deno.env.get("SITE_URL") ?? "").replace(/\/?$/, "/");
 
 function pad(n: number): string {
@@ -104,7 +105,7 @@ export async function handler(req: Request): Promise<Response> {
     };
   });
 
-  const title = "Jadwal Acara " + date;
+  const title = APP_TITLE + " - Jadwal Acara " + date;
 
   if (format === "json") {
     const body = JSON.stringify({ title, date, generated_at: new Date().toISOString(), count: events.length, events }, null, 2);

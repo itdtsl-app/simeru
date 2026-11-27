@@ -80,3 +80,44 @@ input.csw { width: 32px; height: 28px; padding: 0; cursor: pointer; }
 .cardhead { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 8px; }
 .btns { display: flex; gap: 6px; flex-wrap: wrap; }
 table.list td .btns { justify-content: flex-end; }
+
+/* ---- menu atas bergaya MRBS ---- */
+header.top { padding: 0; align-items: stretch; background: #4b667b; flex-wrap: wrap; }
+header.top h1 { padding: 0 18px; display: flex; align-items: center; min-height: 54px; font-size: 1.2em; }
+header.top a { color: #fff; }
+.mainnav { display: flex; align-items: stretch; flex: 1; flex-wrap: wrap; }
+.mainnav .navitem, .mainnav .navsearch { display: flex; align-items: center; justify-content: center; padding: 0 24px;
+  min-height: 54px; border-left: 1px solid #ffffff55; color: #fff; text-decoration: none; }
+.mainnav .navitem:hover { background: #3a5266; color: #fff; }
+.mainnav .navitem.on { background: #0B263B; }
+.navsearch label { display: flex; gap: 6px; align-items: center; }
+.navsearch input { width: 150px; }
+#userbox { flex-direction: column; justify-content: center; align-items: center; gap: 4px; padding: 6px 22px;
+  border-left: 1px solid #ffffff55; min-width: 200px; text-align: center; }
+.uname { font-size: .9em; }
+button.linkbtn { background: none; border: 0; color: #fff; text-decoration: underline; padding: 0; font-size: .85em; }
+button.linkbtn:hover { background: none; color: #ffd0e0; }
+
+/* ---- kalender mini 3 bulan ---- */
+.minical { display: flex; justify-content: center; align-items: flex-start; gap: 24px; padding: 10px 16px 2px; flex-wrap: wrap; }
+table.mc { border-collapse: collapse; font-size: 12px; }
+table.mc caption { font-weight: bold; padding-bottom: 4px; }
+table.mc caption a { color: #0B263B; text-decoration: none; }
+table.mc caption a:hover { color: #ff0066; }
+table.mc th { font-weight: normal; padding: 1px 5px; }
+table.mc td { text-align: center; padding: 0; }
+table.mc td a { display: block; padding: 2px 5px; text-decoration: none; color: #0B263B; border: 1px solid transparent; }
+table.mc td a:hover { background: #d1d9de; }
+table.mc td a.today { color: #ff0066; border: 1px dotted #ff0066; font-weight: bold; }
+table.mc td a.sel { background: #4b667b; color: #fff; border-color: #4b667b; }
+table.mc td a.sel.today { color: #fff; border: 1px solid #ff0066; }
+.mcnav { align-self: center; font-size: 24px; text-decoration: none; color: #4b667b; padding: 0 6px; }
+.mcnav:hover { color: #ff0066; }
+.btn { display: inline-block; text-decoration: none; }
+.inline { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+table.list tfoot th { background: #d1d9de; color: #0B263B; }
+@media (max-width: 760px) {
+  table.mc:not(:nth-of-type(2)) { display: none; }       /* di layar sempit hanya bulan terpilih */
+  .mainnav .navitem, .mainnav .navsearch { min-height: 44px; padding: 0 14px; }
+  #userbox { min-width: 0; width: 100%; border-left: 0; border-top: 1px solid #ffffff55; flex-direction: row; flex-wrap: wrap; }
+}

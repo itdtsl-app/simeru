@@ -1,4 +1,4 @@
-# SIMERU di GitHub Pages + Supabase
+# SIMERU DTSL di GitHub Pages + Supabase
 
 Versi baru SIMERU (jadwal ruangan): **web statis** di github.io, **Supabase** untuk database, login, dan push update realtime. Tidak ada server PHP.
 
@@ -17,11 +17,18 @@ tests/                     -> uji otomatis (sh tests/run-all.sh)
 - **Anti-bentrok dijaga database** (exclusion constraint), jadi dua orang tidak mungkin memesan ruangan yang sama pada jam yang sama, walau menyimpan bersamaan.
 - **Push update realtime** (Supabase Realtime): perubahan muncul di semua browser tanpa refresh.
 - **Login** (Supabase Auth). Siapa saja boleh melihat jadwal; hanya pengguna login yang boleh menambah; ubah/hapus hanya oleh pembuat atau admin.
+- **Menu admin "Kelola Area & Ruang"** (tombol muncul di header untuk admin): tambah, ubah, nonaktifkan/aktifkan, dan hapus area serta ruangan; pindahkan ruangan ke area lain; atur jam grid dan ukuran slot per area. Menghapus menampilkan jumlah jadwal yang ikut terhapus dan meminta ketik HAPUS bila ada jadwalnya.
+- **Menu atas bergaya MRBS**: Jadwal, Ruang, Laporan, kotak Cari, dan blok pengguna (nama, Masuk/Keluar, Daftar pengguna, Kelola Area & Ruang untuk admin).
+- **Kalender 3 bulan** (bulan sebelumnya, terpilih, berikutnya) dengan hari ini berwarna merah muda dan tanggal terpilih ditandai; klik tanggal untuk pindah hari, panah untuk geser bulan. Di layar sempit hanya bulan terpilih yang tampil.
+- **Ruang**: daftar area dan ruangan beserta kapasitas dan keterangan, dengan tautan ke jadwalnya.
+- **Cari**: cari di judul, deskripsi, dan nama pembuat (default hanya acara yang belum lewat).
+- **Laporan**: pilih rentang tanggal, area, dan ruangan; ringkasan jumlah acara dan total jam per ruangan; rincian; unduh **CSV** (pemisah titik koma, cocok untuk Excel berbahasa Indonesia; sel yang diawali `=`, `+`, `-`, `@` dinetralkan agar tidak dieksekusi sebagai rumus).
+- **Daftar pengguna** (admin): lihat akun dan ubah peran admin/pengguna. Butuh `supabase/users.sql` (opsional, jalankan sekali di SQL Editor).
 - **Feed RSS dan JSON** lewat Edge Function.
 - Alamat bisa dibagikan, misalnya `.../#view=list&date=2026-11-26&area=1`.
 
 ## Yang BELUM ada dibanding MRBS lama
-Tampilan Minggu dan Bulan, alur approval, email notifikasi/pengingat, halaman admin area/ruangan/pengguna (sementara lewat **Table Editor** Supabase), pencarian dan laporan, ubah seluruh seri sekaligus, import akun pengguna lama.
+Tampilan Minggu dan Bulan, alur approval, email notifikasi/pengingat, pembuatan akun dari dalam aplikasi (akun baru tetap dibuat lewat **Authentication > Users** di Supabase), ubah seluruh seri sekaligus, import akun pengguna lama.
 
 ## Pasang, langkah demi langkah
 
@@ -34,10 +41,10 @@ Tampilan Minggu dan Bulan, alur approval, email notifikasi/pengingat, halaman ad
    update public.profiles set role = 'admin'
     where id = (select id from auth.users where email = 'email-anda@contoh.ac.id');
    ```
-5. Isi area dan ruangan lewat **Table Editor** (tabel `areas`, lalu `rooms`), atau pakai contoh di bagian 6 `schema.sql`. Kolom `start_hour`/`end_hour`/`slot_minutes` mengatur rentang jam dan ukuran slot grid.
+5. Setelah situs berjalan dan Anda login sebagai admin, klik **Kelola Area & Ruang** untuk menambah area dan ruangan. (Alternatif: Table Editor Supabase atau contoh di bagian 6 `schema.sql`.)
 
 ### 2. Konfigurasi web
-Salin dari **Project Settings > API** ke `web/config.js`: `SUPABASE_URL` dan `SUPABASE_ANON_KEY`.
+Salin dari **Project Settings > API** ke `web/config.js`: `SUPABASE_URL` dan `SUPABASE_ANON_KEY`. Nama aplikasi diatur oleh `APP_TITLE` (default **SIMERU DTSL**).
 > `anon key` memang dirancang tampil publik; keamanan datanya ada di aturan RLS pada `schema.sql`. **Jangan pernah** menaruh `service_role` key di repo atau `config.js`.
 
 ### 3. GitHub Pages
@@ -65,6 +72,9 @@ psql "<...>" -f sql_out/02_entries_0001.sql       # ulangi untuk tiap file 02_*
 psql "<...>" -f sql_out/03_finish.sql
 ```
 Connection string ada di Supabase **Connect** (pakai *Session pooler*). Skrip melaporkan jadwal yang dilewati; jadwal lama yang bertabrakan di ruangan yang sama dilewati oleh database. Jadwal hasil impor belum terhubung ke akun, jadi hanya admin yang dapat mengubahnya.
+
+## Jika muncul "Gagal terhubung ke Supabase: Anda tidak punya izin..." (error 42501)
+Proyek Supabase baru tidak lagi memberi hak akses otomatis pada tabel baru. Jalankan blok **3b** dari `supabase/schema.sql` (bagian GRANT) di SQL Editor, lalu muat ulang halaman dengan Ctrl+F5.
 
 ## Keamanan: periksa sebelum dipakai
 - **Data jadwal terbaca publik** (nama acara, deskripsi, nama pembuat) oleh siapa pun yang tahu alamat situs. Itu sama dengan tampilan publik MRBS. Jika tidak boleh, ubah policy `entries_read` menjadi `to authenticated` (petunjuk di `schema.sql`); konsekuensinya feed dan layar tanpa login ikut berhenti.

@@ -52,6 +52,8 @@
     date: L.todayStr(OFF),
     view: 'day',                        // 'day' | 'list'
     entries: [],
+    q: '',                              // kata kunci pencarian
+    searchAll: false,                   // pencarian: termasuk acara yang sudah lewat
     live: false
   };
   var loadToken = 0;
@@ -66,6 +68,12 @@
     if (ok) { setTimeout(function () { if (m.textContent === text) { m.hidden = true; } }, 5000); }
   }
 
+  // Menyembunyikan pesan ERROR saja; pesan sukses (hijau) dibiarkan sampai hilang sendiri
+  function clearErr() {
+    var m = $('msg');
+    if (m.className.indexOf('ok') < 0) { m.hidden = true; }
+  }
+
   function errText(err) {
     if (!err) { return 'Terjadi kesalahan.'; }
     if (err.code === '23P01') { return 'Bentrok: ruangan sudah dipakai pada jam tersebut.'; }
@@ -76,6 +84,8 @@
   }
 
   // ------------------------------------------------------------------ URL hash
+  var VIEWS = ['day', 'list', 'rooms', 'report', 'search', 'users', 'admin'];
+
   function readHash() {
     var p = new URLSearchParams(location.hash.slice(1));
     var d = p.get('date');
@@ -83,14 +93,22 @@
     var a = parseInt(p.get('area'), 10);
     if (a >= 0) { S.areaId = a; }
     var v = p.get('view');
-    if (v === 'day' || v === 'list' || v === 'admin') { S.view = v; }
+    if (VIEWS.indexOf(v) >= 0) { S.view = v; }
+    if (p.has('q')) { S.q = p.get('q'); }
   }
   function writeHash() {
+    history.replaceState(null, '', hashFor({ q: S.view === 'search' ? S.q : '' }));
+  }
+
+  // Alamat hash untuk suatu tampilan (dipakai tautan menu atas dan kalender mini)
+  function hashFor(over) {
+    var v = Object.assign({ view: S.view, date: S.date, area: S.areaId, q: '' }, over);
     var p = new URLSearchParams();
-    p.set('view', S.view);
-    p.set('date', S.date);
-    if (S.areaId !== null) { p.set('area', S.areaId); }
-    history.replaceState(null, '', '#' + p.toString());
+    p.set('view', v.view);
+    p.set('date', v.date);
+    if (v.area !== null && v.area !== undefined) { p.set('area', v.area); }
+    if (v.q) { p.set('q', v.q); }
+    return '#' + p.toString();
   }
 
   // ------------------------------------------------------------------ data
@@ -105,7 +123,7 @@
     return r ? S.areas.filter(function (a) { return a.id === r.area_id; })[0] || null : null;
   }
   function normalize() {
-    if (S.view === 'admin' && !isAdmin()) { S.view = 'day'; }
+    if ((S.view === 'admin' || S.view === 'users') && !isAdmin()) { S.view = 'day'; }
     var valid = S.areas.some(function (a) { return a.id === S.areaId; });
     if (S.view === 'day' && !valid) { S.areaId = S.areas.length ? S.areas[0].id : null; }
     if (S.view === 'list' && !valid && S.areaId !== 0) { S.areaId = 0; }
@@ -120,7 +138,7 @@
   }
 
   async function loadEntries() {
-    if (S.view === 'admin') { renderAdmin(); return; }
+    if (PAGE_VIEWS[S.view]) { PAGE_VIEWS[S.view](); return; }
     var token = ++loadToken;
     var from = L.toIso(S.date, '00:00', OFF);
     var to = L.toIso(L.addDays(S.date, 1), '00:00', OFF);
@@ -137,7 +155,7 @@
     var res = await q.lt('start_time', to).gt('end_time', from).order('start_time');
     if (token !== loadToken) { return; }      // ada permintaan yang lebih baru
     if (res.error) { showMsg('Gagal memuat jadwal: ' + errText(res.error)); return; }
-    showMsg('');
+    clearErr();
     S.entries = res.data;
     renderMain();
   }
@@ -165,26 +183,32 @@
   // ------------------------------------------------------------------ header & toolbar
   function renderHeader() {
     var box = $('userbox');
-    box.replaceChildren();
+    var kids = [];
     if (S.session) {
       var name = (S.profile && S.profile.display_name) || S.session.user.email;
-      var kids = [h('span', null, name + (isAdmin() ? ' (admin)' : '')),
-        isAdmin() ? h('button', { onclick: function () { go({ view: 'admin' }); } }, '\u2699 Kelola Area & Ruang') : null,
-        h('button', { onclick: function () { sb.auth.signOut(); } }, 'Keluar')].filter(Boolean);
-      box.append.apply(box, kids);        // append(null) menulis teks "null" di DOM asli, jadi null disaring dulu
+      kids.push(h('div', { class: 'uname' }, name + (isAdmin() ? ' (admin)' : '')),
+        h('button', { onclick: function () { sb.auth.signOut(); } }, 'Keluar'));
+      if (isAdmin()) {
+        kids.push(h('button', { class: 'linkbtn', onclick: function () { go({ view: 'users' }); } }, 'Daftar pengguna'),
+          h('button', { class: 'linkbtn', onclick: function () { go({ view: 'admin' }); } }, '\u2699 Kelola Area & Ruang'));
+      }
     } else {
-      box.append(h('button', { onclick: function () { openLogin(); } }, 'Masuk'));
+      kids.push(h('div', { class: 'uname' }, 'Belum masuk'),
+        h('button', { onclick: function () { openLogin(); } }, 'Masuk'));
     }
+    box.replaceChildren.apply(box, kids);
   }
 
   function renderToolbar() {
     var tb = $('toolbar');
-    if (S.view === 'admin') {
-      tb.replaceChildren(
-        h('button', { onclick: function () { go({ view: 'day' }); } }, '\u2039 Kembali ke jadwal'),
-        h('strong', null, 'Kelola Area & Ruang'),
-        h('span', { class: 'spacer' }),
-        h('button', { class: 'primary', onclick: function () { openAreaForm(null); } }, '+ Tambah area'));
+    renderNav();
+    renderMiniCal();
+    if (PAGE_TITLES[S.view]) {
+      var tkids = [h('button', { onclick: function () { go({ view: 'day' }); } }, '\u2039 Kembali ke jadwal'),
+        h('strong', null, PAGE_TITLES[S.view]),
+        h('span', { class: 'spacer' })];
+      if (S.view === 'admin') { tkids.push(h('button', { class: 'primary', onclick: function () { openAreaForm(null); } }, '+ Tambah area')); }
+      tb.replaceChildren.apply(tb, tkids);
       return;
     }
     var areaSel = h('select', { 'aria-label': 'Area', onchange: function (e) { go({ areaId: parseInt(e.target.value, 10) }); } },
@@ -414,6 +438,7 @@
       if (!res.data.length) { err.textContent = 'Tidak ada yang terhapus (tidak punya izin?).'; err.hidden = false; return; }
       closeDialog();
       showMsg(res.data.length + ' jadwal dihapus.', true);
+      RPT.result = null;                  // hasil laporan lama sudah tidak akurat
       loadEntries();
     }
     var buttons = [h('button', { onclick: closeDialog }, 'Batal'),
@@ -622,7 +647,7 @@
     var r = await sb.from('rooms').select('*').order('sort_order').order('name');
     if (token !== loadToken) { return; }
     if (a.error || r.error) { showMsg('Gagal memuat data admin: ' + errText(a.error || r.error)); return; }
-    showMsg('');
+    clearErr();
     adminData = { areas: a.data, rooms: r.data };
 
     var cards = adminData.areas.map(function (area) {
@@ -816,10 +841,300 @@
     ]);
   }
 
+  // ------------------------------------------------------------------ menu atas & kalender mini
+  var PAGE_TITLES = { rooms: 'Daftar Ruangan', report: 'Laporan', search: 'Hasil Pencarian', users: 'Daftar Pengguna', admin: 'Kelola Area & Ruang' };
+  var PAGE_VIEWS = { admin: renderAdmin, users: renderUsers, rooms: renderRooms, search: renderSearch, report: renderReport };
+
+  function renderNav() {
+    var nav = $('nav');
+    var sched = S.view === 'list' ? 'list' : 'day';
+    function item(label, view, active) {
+      return h('a', { class: 'navitem' + (active ? ' on' : ''), href: hashFor({ view: view }) }, label);
+    }
+    var q = h('input', { type: 'search', name: 'q', placeholder: 'kata kunci', value: S.view === 'search' ? S.q : '', 'aria-label': 'Cari acara' });
+    var form = h('form', { class: 'navsearch', onsubmit: function (ev) {
+      ev.preventDefault();
+      var t = q.value.trim();
+      if (t) { go({ view: 'search', q: t }); }
+    } }, h('label', null, 'Cari: ', q));
+    nav.replaceChildren(
+      item('Jadwal', sched, S.view === 'day' || S.view === 'list'),
+      item('Ruang', 'rooms', S.view === 'rooms'),
+      item('Laporan', 'report', S.view === 'report'),
+      form);
+  }
+
+  // Tiga kalender bulan (bulan sebelumnya, bulan terpilih, bulan berikutnya) seperti di MRBS
+  function renderMiniCal() {
+    var box = $('minical');
+    var base = L.firstOfMonth(S.date);
+    var today = L.todayStr(OFF);
+    var sched = S.view === 'list' ? 'list' : 'day';
+    var months = [L.shiftMonth(base, -1), base, L.shiftMonth(base, 1)];
+    var tables = months.map(function (m) {
+      var y = parseInt(m.slice(0, 4), 10), mo = parseInt(m.slice(5, 7), 10);
+      return h('table', { class: 'mc' },
+        h('caption', null, h('a', { href: hashFor({ view: sched, date: m }) }, L.monthTitle(y, mo))),
+        h('thead', null, h('tr', null, L.DAY_ABBR.map(function (d) { return h('th', null, d); }))),
+        h('tbody', null, L.monthMatrix(y, mo).map(function (week) {
+          return h('tr', null, week.map(function (d) {
+            if (!d) { return h('td', null); }
+            var ds = m.slice(0, 8) + L.pad(d);
+            var cls = (ds === today ? 'today ' : '') + (ds === S.date ? 'sel' : '');
+            return h('td', null, h('a', { class: cls.trim(), href: hashFor({ view: sched, date: ds }) }, d));
+          }));
+        })));
+    });
+    var prev = h('a', { class: 'mcnav', title: 'Bulan sebelumnya', href: hashFor({ view: sched, date: L.shiftMonth(S.date, -1) }) }, '\u2039');
+    var next = h('a', { class: 'mcnav', title: 'Bulan berikutnya', href: hashFor({ view: sched, date: L.shiftMonth(S.date, 1) }) }, '\u203A');
+    box.replaceChildren.apply(box, [prev].concat(tables, [next]));
+  }
+
+  // ------------------------------------------------------------------ tabel acara (pencarian & laporan)
+  function entriesTable(list) {
+    var rows = list.map(function (e) {
+      var s = Date.parse(e.start_time), en = Date.parse(e.end_time);
+      var sd = L.msToDate(s, OFF), ed = L.msToDate(en, OFF);
+      return h('tr', { class: 'row', onclick: function () { openDetail(e); } },
+        h('td', { class: 'time' }, L.shortDate(sd)),
+        h('td', { class: 'time' }, L.msToTime(s, OFF) + ' - ' + L.msToTime(en, OFF) + (ed !== sd ? ' (' + L.shortDate(ed) + ')' : '')),
+        h('td', null, h('span', { class: 'dot', style: { backgroundColor: L.entryColor(e) } }), e.name,
+          e.tentative ? h('span', { class: 'tag' }, 'Tentatif') : null,
+          h('span', { class: 'tag' }, L.TYPE_LABELS[e.type] || e.type)),
+        h('td', null, e.room_name, h('div', { class: 'muted' }, e.area_name)),
+        h('td', null, e.created_by_name || ''));
+    });
+    return h('table', { class: 'list' },
+      h('thead', null, h('tr', null, h('th', null, 'Tanggal'), h('th', null, 'Waktu'), h('th', null, 'Acara'),
+        h('th', null, 'Ruang'), h('th', null, 'Dibuat oleh'))),
+      h('tbody', null, rows.length ? rows : h('tr', null, h('td', { colspan: 5 }, 'Tidak ada acara.'))));
+  }
+
+  // ------------------------------------------------------------------ halaman Ruang
+  function renderRooms() {
+    var main = $('main');
+    nowCtx = null;
+    clearErr();
+    if (!S.areas.length) {
+      main.replaceChildren(h('div', { class: 'notice' }, isAdmin() ? 'Belum ada area. Tambahkan lewat menu Kelola Area & Ruang.' : 'Belum ada area/ruangan.'));
+      return;
+    }
+    var parts = S.areas.map(function (a) {
+      var rs = S.rooms.filter(function (r) { return r.area_id === a.id; });
+      var table = rs.length
+        ? h('table', { class: 'list' },
+            h('thead', null, h('tr', null, h('th', null, 'Ruangan'), h('th', null, 'Kapasitas'), h('th', null, 'Keterangan'))),
+            h('tbody', null, rs.map(function (r) {
+              return h('tr', null, h('td', null, r.name),
+                h('td', null, (r.capacity === null || r.capacity === undefined) ? '-' : r.capacity + ' orang'),
+                h('td', null, r.description || ''));
+            })))
+        : h('p', { class: 'muted' }, 'Belum ada ruangan di area ini.');
+      return h('section', { class: 'card' },
+        h('div', { class: 'cardhead' },
+          h('div', null, h('strong', null, a.name),
+            h('div', { class: 'muted' }, L.minutesToTime(a.start_hour * 60) + ' - ' + L.minutesToTime(a.end_hour * 60) + ' \u2022 ' + rs.length + ' ruangan')),
+          h('div', { class: 'btns' }, h('a', { class: 'btn', href: hashFor({ view: 'day', area: a.id }) }, 'Lihat jadwal'))),
+        table);
+    });
+    main.replaceChildren.apply(main, parts);
+  }
+
+  // ------------------------------------------------------------------ halaman Pencarian
+  async function renderSearch() {
+    var main = $('main');
+    nowCtx = null;
+    var q = (S.q || '').trim();
+    if (!q) {
+      main.replaceChildren(h('div', { class: 'notice' }, 'Ketik kata kunci di kotak "Cari" pada menu atas, lalu tekan Enter.'));
+      return;
+    }
+    var token = ++loadToken;
+    main.replaceChildren(h('div', { class: 'notice' }, 'Mencari...'));
+    var pat = '%' + L.escapeLike(q) + '%';
+    var fromIso = L.toIso(L.todayStr(OFF), '00:00', OFF);
+    var results = await Promise.all(['name', 'description', 'created_by_name'].map(function (col) {
+      var x = sb.from('events').select('*').ilike(col, pat);
+      if (!S.searchAll) { x = x.gte('end_time', fromIso); }
+      return x.order('start_time', { ascending: !S.searchAll }).limit(100);
+    }));
+    if (token !== loadToken) { return; }
+    var bad = results.filter(function (r) { return r.error; })[0];
+    if (bad) {
+      showMsg('Pencarian gagal: ' + errText(bad.error));
+      main.replaceChildren();
+      return;
+    }
+    clearErr();
+    var seen = {}, merged = [];
+    results.forEach(function (r) {
+      r.data.forEach(function (e) { if (!seen[e.id]) { seen[e.id] = true; merged.push(e); } });
+    });
+    merged.sort(function (a, b) {
+      var d = Date.parse(a.start_time) - Date.parse(b.start_time);
+      return S.searchAll ? -d : d;
+    });
+    var capped = merged.length > 100;
+    merged = merged.slice(0, 100);
+    var all = h('input', { type: 'checkbox', checked: S.searchAll, onchange: function () { S.searchAll = all.checked; renderSearch(); } });
+    var parts = [
+      h('h2', { class: 'daytitle' }, merged.length + ' hasil untuk "' + q + '"'),
+      h('p', null, h('label', null, all, ' Termasuk acara yang sudah lewat')),
+      entriesTable(merged)];
+    if (capped) { parts.push(h('p', { class: 'muted' }, 'Hanya 100 hasil teratas yang ditampilkan. Persempit kata kunci.')); }
+    main.replaceChildren.apply(main, parts);
+  }
+
+  // ------------------------------------------------------------------ halaman Laporan
+  var RPT = { from: L.firstOfMonth(L.todayStr(OFF)), to: L.lastOfMonth(L.todayStr(OFF)), areaId: 0, roomId: 0, result: null };
+
+  function renderReport() {
+    var main = $('main');
+    nowCtx = null;
+    clearErr();
+    var fromIn = h('input', { type: 'date', name: 'from', value: RPT.from });
+    var toIn = h('input', { type: 'date', name: 'to', value: RPT.to });
+    var roomSel = h('select', { name: 'room' });
+    var areaSel = h('select', { name: 'area', onchange: function () {
+      RPT.areaId = parseInt(areaSel.value, 10) || 0;
+      RPT.roomId = 0;
+      fillRooms();
+    } }, h('option', { value: 0, selected: RPT.areaId === 0 }, 'Semua area'),
+      S.areas.map(function (a) { return h('option', { value: a.id, selected: a.id === RPT.areaId }, a.name); }));
+    function fillRooms() {
+      var list = S.rooms.filter(function (r) { return !RPT.areaId || r.area_id === RPT.areaId; });
+      roomSel.replaceChildren.apply(roomSel, [h('option', { value: 0 }, 'Semua ruangan')].concat(list.map(function (r) {
+        return h('option', { value: r.id, selected: r.id === RPT.roomId }, r.name);
+      })));
+    }
+    fillRooms();
+    var showBtn = h('button', { class: 'primary', onclick: runReport }, 'Tampilkan');
+
+    async function runReport() {
+      if (!L.parseDate(fromIn.value) || !L.parseDate(toIn.value)) { showMsg('Tanggal tidak valid.'); return; }
+      if (toIn.value < fromIn.value) { showMsg('Tanggal akhir harus sama dengan atau setelah tanggal awal.'); return; }
+      RPT.from = fromIn.value;
+      RPT.to = toIn.value;
+      RPT.areaId = parseInt(areaSel.value, 10) || 0;
+      RPT.roomId = parseInt(roomSel.value, 10) || 0;
+      clearErr();
+      showBtn.disabled = true;
+      try {
+        var fromIso = L.toIso(RPT.from, '00:00', OFF), toIso = L.toIso(L.addDays(RPT.to, 1), '00:00', OFF);
+        var rows = [], page = 0, PAGE = 1000, MAX = 20000, capped = false;
+        for (;;) {
+          var q = sb.from('events').select('*').lt('start_time', toIso).gt('end_time', fromIso);
+          if (RPT.areaId) { q = q.eq('area_id', RPT.areaId); }
+          if (RPT.roomId) { q = q.eq('room_id', RPT.roomId); }
+          var res = await q.order('start_time').order('id').range(page * PAGE, page * PAGE + PAGE - 1);
+          if (res.error) { showMsg('Gagal memuat laporan: ' + errText(res.error)); return; }
+          rows = rows.concat(res.data);
+          if (res.data.length < PAGE) { break; }
+          page++;
+          if (rows.length >= MAX) { capped = true; break; }
+        }
+        RPT.result = { rows: rows, capped: capped, fromMs: Date.parse(fromIso), toMs: Date.parse(toIso) };
+      } finally {
+        showBtn.disabled = false;
+      }
+      renderReport();
+    }
+
+    var parts = [h('div', { class: 'card' }, h('div', { class: 'inline filters' },
+      h('label', null, 'Dari ', fromIn), h('label', null, 'Sampai ', toIn),
+      h('label', null, 'Area ', areaSel), h('label', null, 'Ruangan ', roomSel), showBtn))];
+
+    if (RPT.result) {
+      var res0 = RPT.result;
+      var sum = L.summarizeByRoom(res0.rows, res0.fromMs, res0.toMs);
+      var totalMin = sum.reduce(function (m, r) { return m + r.minutes; }, 0);
+      parts.push(h('h2', { class: 'daytitle' }, 'Ringkasan ' + L.shortDate(RPT.from) + ' \u2013 ' + L.shortDate(RPT.to)));
+      parts.push(h('table', { class: 'list' },
+        h('thead', null, h('tr', null, h('th', null, 'Area'), h('th', null, 'Ruangan'), h('th', null, 'Jumlah acara'), h('th', null, 'Total jam'))),
+        h('tbody', null, sum.length ? sum.map(function (r) {
+          return h('tr', null, h('td', null, r.area_name), h('td', null, r.room_name), h('td', null, r.count), h('td', null, L.formatHours(r.minutes)));
+        }) : h('tr', null, h('td', { colspan: 4 }, 'Tidak ada acara pada rentang ini.'))),
+        sum.length ? h('tfoot', null, h('tr', null, h('th', { colspan: 2 }, 'Total'),
+          h('th', null, res0.rows.length), h('th', null, L.formatHours(totalMin)))) : null));
+      parts.push(h('p', null, h('button', { onclick: function () { downloadReportCsv(res0); } }, 'Unduh CSV (' + res0.rows.length + ' acara)')));
+      if (res0.capped) { parts.push(h('p', { class: 'muted' }, 'Data dibatasi 20.000 acara pertama. Persempit rentang tanggal.')); }
+      parts.push(h('h2', { class: 'daytitle' }, 'Rincian'));
+      parts.push(entriesTable(res0.rows.slice(0, 500)));
+      if (res0.rows.length > 500) { parts.push(h('p', { class: 'muted' }, 'Rincian menampilkan 500 acara pertama; berkas CSV memuat semuanya.')); }
+    }
+    main.replaceChildren.apply(main, parts);
+  }
+
+  function downloadReportCsv(res) {
+    var head = ['Tanggal', 'Mulai', 'Selesai', 'Tanggal selesai', 'Acara', 'Deskripsi', 'Ruang', 'Area', 'Tipe', 'Status', 'Dibuat oleh'];
+    var lines = [L.csvLine(head)];
+    res.rows.forEach(function (e) {
+      var s = Date.parse(e.start_time), en = Date.parse(e.end_time);
+      lines.push(L.csvLine([L.msToDate(s, OFF), L.msToTime(s, OFF), L.msToTime(en, OFF), L.msToDate(en, OFF),
+        e.name, e.description || '', e.room_name, e.area_name, L.TYPE_LABELS[e.type] || e.type,
+        e.tentative ? 'Tentatif' : 'Dikonfirmasi', e.created_by_name || '']));
+    });
+    var blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'laporan-simeru-' + RPT.from + '_sd_' + RPT.to + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  // ------------------------------------------------------------------ halaman Daftar Pengguna (admin)
+  async function renderUsers() {
+    var main = $('main');
+    nowCtx = null;
+    if (!isAdmin()) {
+      main.replaceChildren(h('div', { class: 'notice' }, 'Menu ini hanya untuk admin.'));
+      return;
+    }
+    var token = ++loadToken;
+    var res = await sb.rpc('list_users');
+    if (token !== loadToken) { return; }
+    if (res.error) {
+      var missing = res.error.code === 'PGRST202' || /list_users/.test(res.error.message || '');
+      main.replaceChildren(h('div', { class: 'notice' }, missing
+        ? [h('p', null, 'Fungsi database untuk daftar pengguna belum dipasang.'),
+           h('p', null, 'Jalankan berkas supabase/users.sql di SQL Editor Supabase, lalu muat ulang halaman ini.')]
+        : 'Gagal memuat daftar pengguna: ' + errText(res.error)));
+      return;
+    }
+    clearErr();
+    var me = S.session ? S.session.user.id : null;
+    function day(ts) { return ts ? L.shortDate(L.msToDate(Date.parse(ts), OFF)) : '-'; }
+    var rows = res.data.map(function (u) {
+      var makeAdmin = u.role !== 'admin';
+      return h('tr', null,
+        h('td', null, u.email || ''), h('td', null, u.display_name || ''),
+        h('td', null, u.role === 'admin' ? h('strong', null, 'admin') : 'pengguna'),
+        h('td', null, day(u.created_at)), h('td', null, day(u.last_sign_in_at)),
+        h('td', null, u.id === me
+          ? h('span', { class: 'muted' }, 'akun Anda')
+          : h('button', { onclick: function () { setRole(u, makeAdmin ? 'admin' : 'user'); } }, makeAdmin ? 'Jadikan admin' : 'Jadikan pengguna')));
+    });
+    main.replaceChildren(
+      h('p', { class: 'muted' }, 'Akun baru dibuat di Supabase > Authentication > Users. Di sini Anda mengatur peran (admin atau pengguna).'),
+      h('table', { class: 'list' },
+        h('thead', null, h('tr', null, h('th', null, 'Email'), h('th', null, 'Nama'), h('th', null, 'Peran'),
+          h('th', null, 'Terdaftar'), h('th', null, 'Login terakhir'), h('th', null, ''))),
+        h('tbody', null, rows)));
+  }
+
+  async function setRole(u, role) {
+    var res = await sb.rpc('set_user_role', { p_user: u.id, p_role: role });
+    if (res.error) { showMsg('Gagal mengubah peran: ' + errText(res.error)); return; }
+    showMsg('Peran ' + (u.email || 'pengguna') + ' menjadi ' + (role === 'admin' ? 'admin.' : 'pengguna.'), true);
+    renderUsers();
+  }
+
   // ------------------------------------------------------------------ realtime
   var reloadTimer = null;
   function scheduleReload() {
-    if (S.view === 'admin') { return; }
+    if (S.view !== 'day' && S.view !== 'list') { return; }
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(loadEntries, 300);
   }
@@ -829,7 +1144,7 @@
       .subscribe(function (status) { setLive(status === 'SUBSCRIBED'); });
   }
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) { loadEntries(); positionNow(); }
+    if (!document.hidden && (S.view === 'day' || S.view === 'list')) { loadEntries(); positionNow(); }
   });
 
   // ------------------------------------------------------------------ mulai
@@ -839,7 +1154,7 @@
       S.session = session;
       await loadProfile();
       renderHeader();
-      if (S.view === 'admin' && !isAdmin()) { go({ view: 'day' }); } else { renderToolbar(); }
+      if ((S.view === 'admin' || S.view === 'users') && !isAdmin()) { go({ view: 'day' }); } else { renderToolbar(); }
     }, 0);
   });
 

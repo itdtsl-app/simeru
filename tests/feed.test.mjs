@@ -43,6 +43,7 @@ assert.strictEqual(res.status, 200);
 assert.match(res.headers.get('content-type'), /application\/json/);
 let j = await res.json();
 assert.strictEqual(j.date, '2026-11-26');
+assert.strictEqual(j.title, 'SIMERU DTSL - Jadwal Acara 2026-11-26');
 assert.strictEqual(j.count, 2);
 assert.strictEqual(j.events[0].start_time, '08:30');
 assert.strictEqual(j.events[0].end_time, '11:00');
