@@ -3,7 +3,7 @@
   'use strict';
 
   var cfg = Object.assign({
-    APP_TITLE: 'SIMERU', TIMEZONE: 'Asia/Jakarta', TZ_OFFSET: '+07:00', ALLOW_SIGNUP: false, FEED_URL: ''
+    APP_TITLE: 'SIMERU DTSL', TIMEZONE: 'Asia/Jakarta', TZ_OFFSET: '+07:00', ALLOW_SIGNUP: false, FEED_URL: ''
   }, window.SIMERU_CONFIG || {});
   var L = window.SimeruLib;
   var OFF = cfg.TZ_OFFSET;
@@ -70,6 +70,8 @@
     if (!err) { return 'Terjadi kesalahan.'; }
     if (err.code === '23P01') { return 'Bentrok: ruangan sudah dipakai pada jam tersebut.'; }
     if (err.code === '42501') { return 'Anda tidak punya izin untuk tindakan ini.'; }
+    if (err.code === '23514') { return 'Data tidak memenuhi batasan database (periksa jam dan ukuran slot).'; }
+    if (err.code === '23503') { return 'Data masih dipakai oleh data lain.'; }
     return err.message || String(err);
   }
 
@@ -81,7 +83,7 @@
     var a = parseInt(p.get('area'), 10);
     if (a >= 0) { S.areaId = a; }
     var v = p.get('view');
-    if (v === 'day' || v === 'list') { S.view = v; }
+    if (v === 'day' || v === 'list' || v === 'admin') { S.view = v; }
   }
   function writeHash() {
     var p = new URLSearchParams();
@@ -103,6 +105,7 @@
     return r ? S.areas.filter(function (a) { return a.id === r.area_id; })[0] || null : null;
   }
   function normalize() {
+    if (S.view === 'admin' && !isAdmin()) { S.view = 'day'; }
     var valid = S.areas.some(function (a) { return a.id === S.areaId; });
     if (S.view === 'day' && !valid) { S.areaId = S.areas.length ? S.areas[0].id : null; }
     if (S.view === 'list' && !valid && S.areaId !== 0) { S.areaId = 0; }
@@ -117,6 +120,7 @@
   }
 
   async function loadEntries() {
+    if (S.view === 'admin') { renderAdmin(); return; }
     var token = ++loadToken;
     var from = L.toIso(S.date, '00:00', OFF);
     var to = L.toIso(L.addDays(S.date, 1), '00:00', OFF);
@@ -164,8 +168,10 @@
     box.replaceChildren();
     if (S.session) {
       var name = (S.profile && S.profile.display_name) || S.session.user.email;
-      box.append(h('span', null, name + (isAdmin() ? ' (admin)' : '')),
-        h('button', { onclick: function () { sb.auth.signOut(); } }, 'Keluar'));
+      var kids = [h('span', null, name + (isAdmin() ? ' (admin)' : '')),
+        isAdmin() ? h('button', { onclick: function () { go({ view: 'admin' }); } }, '\u2699 Kelola Area & Ruang') : null,
+        h('button', { onclick: function () { sb.auth.signOut(); } }, 'Keluar')].filter(Boolean);
+      box.append.apply(box, kids);        // append(null) menulis teks "null" di DOM asli, jadi null disaring dulu
     } else {
       box.append(h('button', { onclick: function () { openLogin(); } }, 'Masuk'));
     }
@@ -173,6 +179,14 @@
 
   function renderToolbar() {
     var tb = $('toolbar');
+    if (S.view === 'admin') {
+      tb.replaceChildren(
+        h('button', { onclick: function () { go({ view: 'day' }); } }, '\u2039 Kembali ke jadwal'),
+        h('strong', null, 'Kelola Area & Ruang'),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'primary', onclick: function () { openAreaForm(null); } }, '+ Tambah area'));
+      return;
+    }
     var areaSel = h('select', { 'aria-label': 'Area', onchange: function (e) { go({ areaId: parseInt(e.target.value, 10) }); } },
       S.view === 'list' ? h('option', { value: 0, selected: S.areaId === 0 }, 'Semua area') : null,
       S.areas.map(function (a) { return h('option', { value: a.id, selected: a.id === S.areaId }, a.name); }));
@@ -208,12 +222,20 @@
     nowCtx = null;
     var area = currentArea();
     if (!area) {
-      main.replaceChildren(h('div', { class: 'notice' }, 'Belum ada area. Tambahkan data di tabel "areas" dan "rooms" pada Supabase.'));
+      main.replaceChildren(h('div', { class: 'notice' },
+        isAdmin()
+          ? [h('p', null, 'Belum ada area. Tambahkan area dan ruangan lebih dulu.'),
+             h('button', { class: 'primary', onclick: function () { go({ view: 'admin' }); } }, '\u2699 Kelola Area & Ruang')]
+          : 'Belum ada area/ruangan. Hubungi admin untuk menambahkannya.'));
       return;
     }
     var rooms = S.rooms.filter(function (r) { return r.area_id === area.id; });
     if (!rooms.length) {
-      main.replaceChildren(h('div', { class: 'notice' }, 'Area ini belum punya ruangan (tabel "rooms").'));
+      main.replaceChildren(h('div', { class: 'notice' },
+        isAdmin()
+          ? [h('p', null, 'Area ini belum punya ruangan.'),
+             h('button', { class: 'primary', onclick: function () { go({ view: 'admin' }); } }, '\u2699 Kelola Area & Ruang')]
+          : 'Area ini belum punya ruangan. Hubungi admin untuk menambahkannya.'));
       return;
     }
     var slotMin = area.slot_minutes;
@@ -574,9 +596,230 @@
     return head + '\n' + lines.join('\n');
   }
 
+
+  // ------------------------------------------------------------------ menu admin: area & ruang
+  var SLOT_CHOICES = [5, 10, 15, 20, 30, 60];
+  var adminData = { areas: [], rooms: [] };
+
+  function maxOrder(list) {
+    return list.reduce(function (m, x) { return Math.max(m, x.sort_order || 0); }, -1) + 1;
+  }
+
+  async function refreshAdmin() {
+    try { await loadStatic(); } catch (e) { showMsg('Gagal memuat ulang data: ' + errText(e)); }
+    renderAdmin();
+  }
+
+  async function renderAdmin() {
+    var main = $('main');
+    nowCtx = null;
+    if (!isAdmin()) {
+      main.replaceChildren(h('div', { class: 'notice' }, 'Menu ini hanya untuk admin.'));
+      return;
+    }
+    var token = ++loadToken;
+    var a = await sb.from('areas').select('*').order('sort_order').order('name');
+    var r = await sb.from('rooms').select('*').order('sort_order').order('name');
+    if (token !== loadToken) { return; }
+    if (a.error || r.error) { showMsg('Gagal memuat data admin: ' + errText(a.error || r.error)); return; }
+    showMsg('');
+    adminData = { areas: a.data, rooms: r.data };
+
+    var cards = adminData.areas.map(function (area) {
+      var myRooms = adminData.rooms.filter(function (x) { return x.area_id === area.id; });
+      var nextRoomOrder = maxOrder(myRooms);
+      var roomTable = myRooms.length
+        ? h('table', { class: 'list' },
+            h('thead', null, h('tr', null, h('th', null, 'Ruangan'), h('th', null, 'Kapasitas'),
+              h('th', null, 'Keterangan'), h('th', null, 'Urutan'), h('th', null, ''))),
+            h('tbody', null, myRooms.map(function (room) {
+              return h('tr', { class: room.disabled ? 'off' : '' },
+                h('td', null, room.name, room.disabled ? h('span', { class: 'tag' }, 'Nonaktif') : null),
+                h('td', null, (room.capacity === null || room.capacity === undefined) ? '-' : room.capacity),
+                h('td', null, room.description || ''),
+                h('td', null, room.sort_order),
+                h('td', null, h('div', { class: 'btns' },
+                  h('button', { onclick: function () { openRoomForm(room, area, nextRoomOrder); } }, 'Ubah'),
+                  h('button', { onclick: function () { toggleDisabled('rooms', room); } }, room.disabled ? 'Aktifkan' : 'Nonaktifkan'),
+                  h('button', { class: 'danger', onclick: function () { openAdminDelete('rooms', room); } }, 'Hapus'))));
+            })))
+        : h('p', { class: 'muted' }, 'Belum ada ruangan di area ini.');
+
+      return h('section', { class: 'card' + (area.disabled ? ' off' : '') },
+        h('div', { class: 'cardhead' },
+          h('div', null,
+            h('strong', null, area.name), area.disabled ? h('span', { class: 'tag' }, 'Nonaktif') : null,
+            h('div', { class: 'muted' }, L.minutesToTime(area.start_hour * 60) + ' - ' + L.minutesToTime(area.end_hour * 60) +
+              ' \u2022 slot ' + area.slot_minutes + ' menit \u2022 urutan ' + area.sort_order)),
+          h('div', { class: 'btns' },
+            h('button', { onclick: function () { openAreaForm(area); } }, 'Ubah area'),
+            h('button', { onclick: function () { toggleDisabled('areas', area); } }, area.disabled ? 'Aktifkan' : 'Nonaktifkan'),
+            h('button', { class: 'danger', onclick: function () { openAdminDelete('areas', area); } }, 'Hapus area'),
+            h('button', { class: 'primary', onclick: function () { openRoomForm(null, area, nextRoomOrder); } }, '+ Tambah ruang'))),
+        roomTable);
+    });
+
+    var body = [h('p', { class: 'muted' }, 'Area/ruangan yang dinonaktifkan disembunyikan dari tampilan jadwal, tetapi datanya tetap tersimpan. ' +
+        'Gunakan Hapus hanya bila benar-benar tidak diperlukan: semua jadwal di dalamnya ikut terhapus permanen.')]
+      .concat(cards.length ? cards : [h('div', { class: 'notice' }, 'Belum ada area. Klik "+ Tambah area" di kanan atas.')]);
+    main.replaceChildren.apply(main, body);
+  }
+
+  async function toggleDisabled(table, row) {
+    var res = await sb.from(table).update({ disabled: !row.disabled }).eq('id', row.id).select('id');
+    if (res.error) { showMsg('Gagal: ' + errText(res.error)); return; }
+    if (!res.data || !res.data.length) { showMsg('Tidak ada yang berubah (tidak punya izin admin?).'); return; }
+    showMsg((table === 'areas' ? 'Area ' : 'Ruangan ') + (row.disabled ? 'diaktifkan.' : 'dinonaktifkan.'), true);
+    await refreshAdmin();
+  }
+
+  function openAreaForm(area) {
+    if (!isAdmin()) { return; }
+    var editing = !!area;
+    var name = h('input', { type: 'text', name: 'name', maxlength: 100, required: true, value: editing ? area.name : '' });
+    var order = h('input', { type: 'number', name: 'sort_order', step: 1, value: editing ? area.sort_order : maxOrder(adminData.areas) });
+    var sh = h('input', { type: 'number', name: 'start_hour', min: 0, max: 23, step: 1, required: true, value: editing ? area.start_hour : 7 });
+    var eh = h('input', { type: 'number', name: 'end_hour', min: 1, max: 24, step: 1, required: true, value: editing ? area.end_hour : 19 });
+    var slot = h('select', { name: 'slot_minutes' }, SLOT_CHOICES.map(function (m) {
+      return h('option', { value: m, selected: m === (editing ? area.slot_minutes : 30) }, m + ' menit');
+    }));
+    var err = h('div', { class: 'ferr', hidden: true });
+    function fail(t) { err.textContent = t; err.hidden = false; }
+    var saveBtn = h('button', { type: 'submit', class: 'primary' }, 'Simpan');
+
+    async function submit(ev) {
+      ev.preventDefault();
+      err.hidden = true;
+      var nm = name.value.trim();
+      var s0 = parseInt(sh.value, 10), e0 = parseInt(eh.value, 10), sl = parseInt(slot.value, 10), ord = parseInt(order.value, 10);
+      if (!nm) { fail('Nama area wajib diisi.'); return; }
+      if (!(s0 >= 0 && s0 <= 23)) { fail('Jam mulai harus antara 0 dan 23.'); return; }
+      if (!(e0 >= 1 && e0 <= 24) || e0 <= s0) { fail('Jam selesai harus antara 1 dan 24, dan setelah jam mulai.'); return; }
+      if (((e0 - s0) * 60) % sl !== 0) { fail('Rentang jam harus habis dibagi ukuran slot.'); return; }
+      var payload = { name: nm, sort_order: isNaN(ord) ? 0 : ord, start_hour: s0, end_hour: e0, slot_minutes: sl };
+      saveBtn.disabled = true;
+      try {
+        var res = editing
+          ? await sb.from('areas').update(payload).eq('id', area.id).select('id')
+          : await sb.from('areas').insert(payload).select('id');
+        if (res.error) { fail(errText(res.error)); return; }
+        if (!res.data || !res.data.length) { fail('Tidak ada yang tersimpan (tidak punya izin admin?).'); return; }
+        closeDialog();
+        showMsg(editing ? 'Area diperbarui.' : 'Area ditambahkan.', true);
+        await refreshAdmin();
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    openDialog(h('form', { onsubmit: submit },
+      h('h3', null, editing ? 'Ubah Area' : 'Tambah Area'), err,
+      row('Nama area', name),
+      row('Jam mulai', h('div', { class: 'inline' }, sh, ' (0\u201323)')),
+      row('Jam selesai', h('div', { class: 'inline' }, eh, ' (1\u201324; batas bawah grid)')),
+      row('Ukuran slot', slot),
+      row('Urutan', order),
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: closeDialog }, 'Batal'), saveBtn)));
+    name.focus();
+  }
+
+  function openRoomForm(room, area, nextOrder) {
+    if (!isAdmin()) { return; }
+    var editing = !!room;
+    var name = h('input', { type: 'text', name: 'name', maxlength: 100, required: true, value: editing ? room.name : '' });
+    var cap = h('input', { type: 'number', name: 'capacity', min: 0, step: 1, value: editing && room.capacity != null ? room.capacity : '' });
+    var descr = h('input', { type: 'text', name: 'description', maxlength: 200, value: editing && room.description ? room.description : '' });
+    var order = h('input', { type: 'number', name: 'sort_order', step: 1, value: editing ? room.sort_order : nextOrder });
+    var areaSel = h('select', { name: 'area_id' }, adminData.areas.map(function (a) {
+      return h('option', { value: a.id, selected: a.id === area.id }, a.name);
+    }));
+    var err = h('div', { class: 'ferr', hidden: true });
+    function fail(t) { err.textContent = t; err.hidden = false; }
+    var saveBtn = h('button', { type: 'submit', class: 'primary' }, 'Simpan');
+
+    async function submit(ev) {
+      ev.preventDefault();
+      err.hidden = true;
+      var nm = name.value.trim();
+      if (!nm) { fail('Nama ruangan wajib diisi.'); return; }
+      var c = cap.value === '' ? null : parseInt(cap.value, 10);
+      if (c !== null && !(c >= 0)) { fail('Kapasitas harus berupa angka 0 atau lebih.'); return; }
+      var ord = parseInt(order.value, 10);
+      var payload = { area_id: parseInt(areaSel.value, 10), name: nm, capacity: c,
+                      description: descr.value.trim() || null, sort_order: isNaN(ord) ? 0 : ord };
+      saveBtn.disabled = true;
+      try {
+        var res = editing
+          ? await sb.from('rooms').update(payload).eq('id', room.id).select('id')
+          : await sb.from('rooms').insert(payload).select('id');
+        if (res.error) { fail(errText(res.error)); return; }
+        if (!res.data || !res.data.length) { fail('Tidak ada yang tersimpan (tidak punya izin admin?).'); return; }
+        closeDialog();
+        showMsg(editing ? 'Ruangan diperbarui.' : 'Ruangan ditambahkan.', true);
+        await refreshAdmin();
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    openDialog(h('form', { onsubmit: submit },
+      h('h3', null, editing ? 'Ubah Ruangan' : 'Tambah Ruangan'), err,
+      row('Area', areaSel),
+      row('Nama ruangan', name),
+      row('Kapasitas', cap),
+      row('Keterangan', descr),
+      row('Urutan', order),
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: closeDialog }, 'Batal'), saveBtn)));
+    name.focus();
+  }
+
+  async function openAdminDelete(table, rowData) {
+    if (!isAdmin()) { return; }
+    var isArea = table === 'areas';
+    var ids = isArea
+      ? adminData.rooms.filter(function (x) { return x.area_id === rowData.id; }).map(function (x) { return x.id; })
+      : [rowData.id];
+    var count = 0;
+    if (ids.length) {
+      var c = await sb.from('entries').select('id', { count: 'exact', head: true }).in('room_id', ids);
+      if (c.error) { showMsg('Gagal memeriksa jadwal: ' + errText(c.error)); return; }
+      count = c.count || 0;
+    }
+    var confirmIn = count > 0
+      ? h('input', { type: 'text', name: 'confirm', placeholder: 'Ketik HAPUS', autocomplete: 'off' })
+      : null;
+    var err = h('div', { class: 'ferr', hidden: true });
+    function fail(t) { err.textContent = t; err.hidden = false; }
+
+    async function doDelete() {
+      if (confirmIn && confirmIn.value.trim() !== 'HAPUS') { fail('Ketik HAPUS (huruf besar) untuk memastikan.'); return; }
+      var res = await sb.from(table).delete().eq('id', rowData.id).select('id');
+      if (res.error) { fail(errText(res.error)); return; }
+      if (!res.data || !res.data.length) { fail('Tidak ada yang terhapus (tidak punya izin admin?).'); return; }
+      closeDialog();
+      showMsg((isArea ? 'Area' : 'Ruangan') + ' dihapus.', true);
+      await refreshAdmin();
+    }
+
+    openDialog([
+      h('h3', null, (isArea ? 'Hapus area' : 'Hapus ruangan') + '?'),
+      h('p', null, rowData.name),
+      h('p', null, isArea
+        ? 'Area ini memiliki ' + ids.length + ' ruangan dan ' + count + ' jadwal. Semuanya akan terhapus permanen.'
+        : 'Ruangan ini memiliki ' + count + ' jadwal. Semuanya akan terhapus permanen.'),
+      h('p', { class: 'muted' }, 'Untuk menyembunyikan tanpa menghapus data, gunakan tombol Nonaktifkan.'),
+      confirmIn ? row('Konfirmasi', confirmIn) : null,
+      err,
+      h('div', { class: 'actions' },
+        h('button', { onclick: closeDialog }, 'Batal'),
+        h('button', { class: 'danger', onclick: doDelete }, 'Ya, hapus permanen'))
+    ]);
+  }
+
   // ------------------------------------------------------------------ realtime
   var reloadTimer = null;
   function scheduleReload() {
+    if (S.view === 'admin') { return; }
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(loadEntries, 300);
   }
@@ -596,6 +839,7 @@
       S.session = session;
       await loadProfile();
       renderHeader();
+      if (S.view === 'admin' && !isAdmin()) { go({ view: 'day' }); } else { renderToolbar(); }
     }, 0);
   });
 

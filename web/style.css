@@ -73,3 +73,10 @@ input.csw { width: 32px; height: 28px; padding: 0; cursor: pointer; }
 .dl { display: grid; grid-template-columns: 110px 1fr; gap: 6px 10px; }
 .dl dt { font-weight: bold; } .dl dd { margin: 0; white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 600px) { .frow, .dl { grid-template-columns: 1fr; } .frow > label { padding-top: 0; } }
+
+/* ---- menu admin ---- */
+.card { background: #fff; border: 1px solid #879AA8; border-radius: 6px; margin-bottom: 14px; padding: 12px 14px; }
+.card.off, tr.off td { opacity: .6; }
+.cardhead { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 8px; }
+.btns { display: flex; gap: 6px; flex-wrap: wrap; }
+table.list td .btns { justify-content: flex-end; }
