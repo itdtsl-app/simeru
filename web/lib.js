@@ -209,6 +209,26 @@
 
   function csvLine(cells, sep) { return cells.map(csvCell).join(sep || ';'); }
 
+
+  // ---- password acak -------------------------------------------------------
+  // Tanpa karakter yang mudah tertukar (0 O 1 l I). 24 + 24 + 8 = 56 karakter.
+  var PW_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+
+  // randomBytes(n) harus mengembalikan n byte acak yang kuat secara kriptografis
+  // (di browser: crypto.getRandomValues). Penolakan byte >= limit mencegah bias modulo.
+  function genPassword(len, randomBytes) {
+    var n = PW_ALPHABET.length;
+    var limit = Math.floor(256 / n) * n;
+    var out = '';
+    while (out.length < len) {
+      var bytes = randomBytes(len * 2);
+      for (var i = 0; i < bytes.length && out.length < len; i++) {
+        if (bytes[i] < limit) { out += PW_ALPHABET.charAt(bytes[i] % n); }
+      }
+    }
+    return out;
+  }
+
   return {
     TYPE_COLORS: TYPE_COLORS, TYPE_LABELS: TYPE_LABELS, PALETTE: PALETTE,
     pad: pad, parseDate: parseDate, fmtDate: fmtDate, addDays: addDays,
@@ -219,6 +239,7 @@
     layout: layout, slotCount: slotCount, minutesFromOffset: minutesFromOffset,
     DAY_ABBR: DAY_ABBR, monthMatrix: monthMatrix, monthTitle: monthTitle, firstOfMonth: firstOfMonth,
     lastOfMonth: lastOfMonth, shiftMonth: shiftMonth, escapeLike: escapeLike, clippedMinutes: clippedMinutes,
-    formatHours: formatHours, summarizeByRoom: summarizeByRoom, csvCell: csvCell, csvLine: csvLine
+    formatHours: formatHours, summarizeByRoom: summarizeByRoom, csvCell: csvCell, csvLine: csvLine,
+    PW_ALPHABET: PW_ALPHABET, genPassword: genPassword
   };
 });

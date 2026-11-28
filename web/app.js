@@ -187,11 +187,8 @@
     if (S.session) {
       var name = (S.profile && S.profile.display_name) || S.session.user.email;
       kids.push(h('div', { class: 'uname' }, name + (isAdmin() ? ' (admin)' : '')),
-        h('button', { onclick: function () { sb.auth.signOut(); } }, 'Keluar'));
-      if (isAdmin()) {
-        kids.push(h('button', { class: 'linkbtn', onclick: function () { go({ view: 'users' }); } }, 'Daftar pengguna'),
-          h('button', { class: 'linkbtn', onclick: function () { go({ view: 'admin' }); } }, '\u2699 Kelola Area & Ruang'));
-      }
+        h('button', { onclick: function () { sb.auth.signOut(); } }, 'Keluar'),
+        h('button', { class: 'linkbtn', onclick: openChangePassword }, 'Ganti password'));
     } else {
       kids.push(h('div', { class: 'uname' }, 'Belum masuk'),
         h('button', { onclick: function () { openLogin(); } }, 'Masuk'));
@@ -208,6 +205,7 @@
         h('strong', null, PAGE_TITLES[S.view]),
         h('span', { class: 'spacer' })];
       if (S.view === 'admin') { tkids.push(h('button', { class: 'primary', onclick: function () { openAreaForm(null); } }, '+ Tambah area')); }
+      if (S.view === 'users') { tkids.push(h('button', { class: 'primary', onclick: function () { openUserForm(null); } }, '+ Tambah pengguna')); }
       tb.replaceChildren.apply(tb, tkids);
       return;
     }
@@ -842,7 +840,7 @@
   }
 
   // ------------------------------------------------------------------ menu atas & kalender mini
-  var PAGE_TITLES = { rooms: 'Daftar Ruangan', report: 'Laporan', search: 'Hasil Pencarian', users: 'Daftar Pengguna', admin: 'Kelola Area & Ruang' };
+  var PAGE_TITLES = { rooms: 'Daftar Ruangan', report: 'Laporan', search: 'Hasil Pencarian', users: 'Pengguna', admin: 'Kelola Area & Ruang' };
   var PAGE_VIEWS = { admin: renderAdmin, users: renderUsers, rooms: renderRooms, search: renderSearch, report: renderReport };
 
   function renderNav() {
@@ -857,11 +855,18 @@
       var t = q.value.trim();
       if (t) { go({ view: 'search', q: t }); }
     } }, h('label', null, 'Cari: ', q));
-    nav.replaceChildren(
+    var items = [
       item('Jadwal', sched, S.view === 'day' || S.view === 'list'),
       item('Ruang', 'rooms', S.view === 'rooms'),
       item('Laporan', 'report', S.view === 'report'),
-      form);
+      form];
+    if (isAdmin()) {
+      // menu admin berada di sisi kanan menu atas, tepat di sebelah blok pengguna
+      var manage = item('Kelola Area & Ruang', 'admin', S.view === 'admin');
+      manage.className += ' push';
+      items.push(manage, item('Pengguna', 'users', S.view === 'users'));
+    }
+    nav.replaceChildren.apply(nav, items);
   }
 
   // Tiga kalender bulan (bulan sebelumnya, bulan terpilih, bulan berikutnya) seperti di MRBS
@@ -1084,7 +1089,33 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   }
 
-  // ------------------------------------------------------------------ halaman Daftar Pengguna (admin)
+  // ------------------------------------------------------------------ halaman Pengguna (admin)
+  // Semua operasi lewat Edge Function "admin-users": membuat/mengubah akun butuh kunci service_role,
+  // yang hanya boleh ada di server. Fungsi itu memeriksa ulang bahwa pemanggilnya admin.
+  async function callAdmin(body) {
+    var res = await sb.functions.invoke('admin-users', { body: body });
+    if (!res.error) { return { data: res.data }; }
+    var status = null;
+    var msg = res.error.message || 'Gagal memanggil fungsi admin-users.';
+    var ctx = res.error.context;
+    if (ctx && typeof ctx.json === 'function') {
+      status = ctx.status;
+      try {
+        var j = await ctx.json();
+        if (j && j.error) { msg = j.error; }
+      } catch (e) { /* isi respons bukan JSON: pakai pesan bawaan */ }
+    }
+    // 404 dari gateway atau gagal terhubung = fungsi belum di-deploy
+    var notDeployed = status === 404 || res.error.name === 'FunctionsFetchError';
+    return { error: { message: msg, status: status, notDeployed: notDeployed } };
+  }
+
+  function randomBytes(n) {
+    var a = new Uint8Array(n);
+    window.crypto.getRandomValues(a);
+    return a;
+  }
+
   async function renderUsers() {
     var main = $('main');
     nowCtx = null;
@@ -1093,42 +1124,136 @@
       return;
     }
     var token = ++loadToken;
-    var res = await sb.rpc('list_users');
+    var res = await callAdmin({ action: 'list' });
     if (token !== loadToken) { return; }
     if (res.error) {
-      var missing = res.error.code === 'PGRST202' || /list_users/.test(res.error.message || '');
-      main.replaceChildren(h('div', { class: 'notice' }, missing
-        ? [h('p', null, 'Fungsi database untuk daftar pengguna belum dipasang.'),
-           h('p', null, 'Jalankan berkas supabase/users.sql di SQL Editor Supabase, lalu muat ulang halaman ini.')]
-        : 'Gagal memuat daftar pengguna: ' + errText(res.error)));
+      main.replaceChildren(h('div', { class: 'notice' }, res.error.notDeployed
+        ? [h('p', null, 'Fungsi "admin-users" belum dipasang di Supabase (atau tidak bisa dijangkau).'),
+           h('p', null, 'Pasang dengan: supabase functions deploy admin-users. Langkah lengkap ada di README, bagian "Kelola pengguna".')]
+        : 'Gagal memuat daftar pengguna: ' + res.error.message));
       return;
     }
     clearErr();
     var me = S.session ? S.session.user.id : null;
     function day(ts) { return ts ? L.shortDate(L.msToDate(Date.parse(ts), OFF)) : '-'; }
-    var rows = res.data.map(function (u) {
-      var makeAdmin = u.role !== 'admin';
-      return h('tr', null,
-        h('td', null, u.email || ''), h('td', null, u.display_name || ''),
+    var rows = (res.data.users || []).map(function (u) {
+      return h('tr', { class: u.disabled ? 'off' : '' },
+        h('td', null, u.email || ''),
+        h('td', null, u.display_name || ''),
         h('td', null, u.role === 'admin' ? h('strong', null, 'admin') : 'pengguna'),
-        h('td', null, day(u.created_at)), h('td', null, day(u.last_sign_in_at)),
-        h('td', null, u.id === me
-          ? h('span', { class: 'muted' }, 'akun Anda')
-          : h('button', { onclick: function () { setRole(u, makeAdmin ? 'admin' : 'user'); } }, makeAdmin ? 'Jadikan admin' : 'Jadikan pengguna')));
+        h('td', null, u.disabled ? h('span', { class: 'tag' }, 'Nonaktif') : 'Aktif'),
+        h('td', null, day(u.created_at)),
+        h('td', null, day(u.last_sign_in_at)),
+        h('td', null, h('div', { class: 'btns' },
+          h('button', { onclick: function () { openUserForm(u); } }, 'Ubah'),
+          u.id === me ? h('span', { class: 'muted' }, 'akun Anda') : null)));
     });
     main.replaceChildren(
-      h('p', { class: 'muted' }, 'Akun baru dibuat di Supabase > Authentication > Users. Di sini Anda mengatur peran (admin atau pengguna).'),
+      h('p', { class: 'muted' }, 'Pengguna yang dinonaktifkan tidak bisa masuk lagi (sesi yang sedang aktif berakhir dalam sekitar satu jam). ' +
+        'Jadwal yang pernah dibuat tetap tersimpan.'),
       h('table', { class: 'list' },
-        h('thead', null, h('tr', null, h('th', null, 'Email'), h('th', null, 'Nama'), h('th', null, 'Peran'),
+        h('thead', null, h('tr', null, h('th', null, 'Email'), h('th', null, 'Nama'), h('th', null, 'Peran'), h('th', null, 'Status'),
           h('th', null, 'Terdaftar'), h('th', null, 'Login terakhir'), h('th', null, ''))),
-        h('tbody', null, rows)));
+        h('tbody', null, rows.length ? rows : h('tr', null, h('td', { colspan: 7 }, 'Belum ada pengguna.')))));
   }
 
-  async function setRole(u, role) {
-    var res = await sb.rpc('set_user_role', { p_user: u.id, p_role: role });
-    if (res.error) { showMsg('Gagal mengubah peran: ' + errText(res.error)); return; }
-    showMsg('Peran ' + (u.email || 'pengguna') + ' menjadi ' + (role === 'admin' ? 'admin.' : 'pengguna.'), true);
-    renderUsers();
+  // Form tambah (u = null) atau ubah pengguna
+  function openUserForm(u) {
+    if (!isAdmin()) { return; }
+    var editing = !!u;
+    var isMe = editing && !!S.session && u.id === S.session.user.id;
+    var email = h('input', { type: 'email', name: 'email', required: true, autocomplete: 'off', value: editing ? u.email : '' });
+    var nm = h('input', { type: 'text', name: 'display_name', maxlength: 100, value: editing ? (u.display_name || '') : '' });
+    var pass = h('input', { type: 'text', name: 'password', autocomplete: 'new-password', spellcheck: 'false',
+      placeholder: editing ? 'kosongkan bila tidak diubah' : 'minimal 8 karakter' });
+    var gen = h('button', { type: 'button', onclick: function () { pass.value = L.genPassword(12, randomBytes); } }, 'Buat otomatis');
+    var roleSel = h('select', { name: 'role', disabled: isMe },
+      [['user', 'Pengguna'], ['admin', 'Admin']].map(function (r) {
+        return h('option', { value: r[0], selected: (editing ? u.role : 'user') === r[0] }, r[1]);
+      }));
+    var active = h('input', { type: 'checkbox', name: 'active', checked: !(editing && u.disabled), disabled: isMe });
+    var err = h('div', { class: 'ferr', hidden: true });
+    function fail(t) { err.textContent = t; err.hidden = false; }
+    var saveBtn = h('button', { type: 'submit', class: 'primary' }, 'Simpan');
+
+    async function submit(ev) {
+      ev.preventDefault();
+      err.hidden = true;
+      var em = email.value.trim().toLowerCase(), name = nm.value.trim(), pw = pass.value;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { fail('Email tidak valid.'); return; }
+      if (!editing && pw.length < 8) { fail('Password minimal 8 karakter.'); return; }
+      if (editing && pw && pw.length < 8) { fail('Password baru minimal 8 karakter.'); return; }
+      var body;
+      if (!editing) {
+        body = { action: 'create', email: em, password: pw, display_name: name, role: roleSel.value };
+      } else {
+        body = { action: 'update', id: u.id };                  // hanya kirim yang berubah
+        if (em !== (u.email || '').toLowerCase()) { body.email = em; }
+        if (name !== (u.display_name || '')) { body.display_name = name; }
+        if (!isMe && roleSel.value !== u.role) { body.role = roleSel.value; }
+        if (!isMe && active.checked === !!u.disabled) { body.disabled = !active.checked; }
+        if (pw) { body.password = pw; }
+        if (Object.keys(body).length === 2) { fail('Tidak ada perubahan.'); return; }
+      }
+      saveBtn.disabled = true;
+      try {
+        var res = await callAdmin(body);
+        if (res.error) { fail(res.error.message); return; }
+        closeDialog();
+        showMsg(editing ? 'Pengguna diperbarui.' : 'Pengguna ' + em + ' dibuat.', true);
+        if (isMe) { await loadProfile(); renderHeader(); }
+        renderUsers();
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    var rows = [
+      row('Email', email),
+      row('Nama', nm),
+      row(editing ? 'Password baru' : 'Password', h('div', { class: 'inline' }, pass, gen)),
+      row('Peran', roleSel)
+    ];
+    if (editing) {
+      rows.push(row('Status', h('label', null, active, ' Akun aktif (boleh masuk)')));
+      if (isMe) { rows.push(row('', h('span', { class: 'muted' }, 'Anda tidak bisa mengubah peran atau menonaktifkan akun sendiri.'))); }
+    } else {
+      rows.push(row('', h('span', { class: 'muted' }, 'Berikan password ini kepada pengguna. Mereka bisa menggantinya lewat tombol "Ganti password".')));
+    }
+    openDialog(h('form', { onsubmit: submit },
+      h('h3', null, editing ? 'Ubah Pengguna' : 'Tambah Pengguna'), err, rows,
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: closeDialog }, 'Batal'), saveBtn)));
+    (editing ? nm : email).focus();
+  }
+
+  // Ganti password akun sendiri (semua pengguna yang sudah masuk)
+  function openChangePassword() {
+    if (!S.session) { return; }
+    var p1 = h('input', { type: 'password', name: 'new_password', autocomplete: 'new-password', required: true });
+    var p2 = h('input', { type: 'password', name: 'confirm_password', autocomplete: 'new-password', required: true });
+    var err = h('div', { class: 'ferr', hidden: true });
+    function fail(t) { err.textContent = t; err.hidden = false; }
+    var saveBtn = h('button', { type: 'submit', class: 'primary' }, 'Simpan');
+    async function submit(ev) {
+      ev.preventDefault();
+      err.hidden = true;
+      if (p1.value.length < 8) { fail('Password minimal 8 karakter.'); return; }
+      if (p1.value !== p2.value) { fail('Konfirmasi password tidak sama.'); return; }
+      saveBtn.disabled = true;
+      try {
+        var res = await sb.auth.updateUser({ password: p1.value });
+        if (res.error) { fail(res.error.message); return; }
+        closeDialog();
+        showMsg('Password diperbarui.', true);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+    openDialog(h('form', { onsubmit: submit },
+      h('h3', null, 'Ganti Password'), err,
+      row('Password baru', p1), row('Ulangi password', p2),
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: closeDialog }, 'Batal'), saveBtn)));
+    p1.focus();
   }
 
   // ------------------------------------------------------------------ realtime

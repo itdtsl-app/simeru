@@ -78,12 +78,13 @@ function makeEnv(role, hash, opts) {
     events: [],
     users: [
       { id: 'u1', email: 'a@b.c', display_name: 'Paul', role: 'admin', created_at: '2026-10-01T00:00:00Z', last_sign_in_at: '2026-11-27T01:00:00Z' },
-      { id: 'u9', email: 'x@y.z', display_name: 'Budi', role: 'user', created_at: '2026-10-02T00:00:00Z', last_sign_in_at: null }
+      { id: 'u9', email: 'x@y.z', display_name: 'Budi', role: 'user', created_at: '2026-10-02T00:00:00Z', last_sign_in_at: null, disabled: false },
+      { id: 'u7', email: 'lama@y.z', display_name: 'Lama', role: 'user', created_at: '2026-10-03T00:00:00Z', last_sign_in_at: null, disabled: true }
     ],
     entryCount: 0
   };
   DATA.events = DATA.entries.map((e) => Object.assign({ room_name: 'Ruang', area_name: 'Area', area_id: 1 }, e));
-  const calls = { rpc: [], ops: [] };
+  const calls = { rpc: [], ops: [], fn: [], auth: [] };
   function qb(table) {
     const st = { table, op: 'select', values: null, filters: [], head: false };
     const q = {
@@ -123,12 +124,31 @@ function makeEnv(role, hash, opts) {
     },
     auth: {
       getSession: () => Promise.resolve({ data: { session: { user: { id: 'u1', email: 'a@b.c' } } } }),
-      onAuthStateChange() {}, signOut() {}, signInWithPassword: () => Promise.resolve({ error: null })
+      onAuthStateChange() {}, signOut() {}, signInWithPassword: () => Promise.resolve({ error: null }),
+      updateUser: async (a) => { calls.auth.push(plain(a)); return { error: opts.pwError ? { message: opts.pwError } : null }; }
+    },
+    functions: {
+      invoke: async (name, init) => {
+        assert.strictEqual(name, 'admin-users');
+        const body = init.body;
+        calls.fn.push(plain(body));
+        if (opts.usersFnMissing) {
+          return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code',
+            context: { status: 404, json: async () => ({ code: 'NOT_FOUND', message: 'Requested function was not found' }) } } };
+        }
+        if (opts.fnError && body.action !== 'list') {
+          return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code',
+            context: { status: 400, json: async () => ({ error: opts.fnError }) } } };
+        }
+        if (body.action === 'list') { return { data: { users: DATA.users }, error: null }; }
+        return { data: { ok: true }, error: null };
+      }
     },
     channel() { const c = { on() { return c; }, subscribe(cb) { cb('SUBSCRIBED'); return c; } }; return c; }
   };
   const sandbox = {
-    document, console, Date, URLSearchParams, Promise, Object, Array, String, parseInt, Math, JSON, Number, isNaN,
+    document, console, Date, URLSearchParams, Promise, Object, Array, String, parseInt, Math, JSON, Number, isNaN, Uint8Array,
+    crypto: require('crypto').webcrypto,
     setTimeout, clearTimeout, setInterval,
     location: { hash: hash || '' }, history: { replaceState() {} },
     SimeruLib: L
@@ -159,6 +179,8 @@ async function scenarioUser() {
   assert.ok(blocks[1].className.includes('tentative'));
   assert.ok(byId.userbox.textContent.includes('Paul'), 'nama pengguna tampil');
   assert.ok(!byId.userbox.textContent.includes('Kelola'), 'pengguna biasa tidak melihat menu admin');
+  assert.ok(btn(byId.userbox, 'Ganti password'), 'tombol Ganti password');
+  assert.ok(!find(byId.nav, (e) => e.tagName === 'A').some((a) => /Kelola|Pengguna/.test(a.textContent)), 'menu atas pengguna biasa tanpa item admin');
   assert.ok(!/null|undefined|\[object/.test(byId.userbox.textContent + byId.toolbar.textContent + byId.main.textContent + byId.nav.textContent + byId.minical.textContent),
     'tidak ada teks "null"/"undefined"/"[object ...]" nyasar di halaman');
   assert.ok(byId.toolbar.textContent.includes('Live'), 'indikator live');
@@ -208,15 +230,22 @@ async function scenarioUserCannotOpenAdmin() {
 }
 
 async function scenarioAdmin() {
-  const { byId, DATA, calls } = makeEnv('admin');
+  // menu atas: item admin berada di sisi kanan, setelah kotak Cari
+  const first = makeEnv('admin');
   await wait(80);
-  assert.ok(byId.userbox.textContent.includes('(admin)'));
-  const adminBtn = btn(byId.userbox, '\u2699 Kelola Area & Ruang');
-  assert.ok(adminBtn, 'admin melihat tombol menu admin');
+  assert.ok(first.byId.userbox.textContent.includes('(admin)'));
+  const navKids = first.byId.nav.children.filter((c) => c.nodeType === 1);
+  assert.deepStrictEqual(navKids.map((k) => k.tagName === 'FORM' ? 'CARI' : k.textContent),
+    ['Jadwal', 'Ruang', 'Laporan', 'CARI', 'Kelola Area & Ruang', 'Pengguna'], 'urutan menu atas untuk admin');
+  const manage = navKids[4], usersLink = navKids[5];
+  assert.ok(manage.attrs.href.startsWith('#view=admin') && manage.className.includes('push'), 'dorong ke kanan');
+  assert.ok(usersLink.attrs.href.startsWith('#view=users'));
+  assert.ok(!first.byId.userbox.textContent.includes('Kelola') && !first.byId.userbox.textContent.includes('Daftar pengguna'),
+    'tautan admin tidak lagi di blok pengguna');
 
-  // masuk menu admin
-  await adminBtn.fire('click');
-  await wait(40);
+  const { byId, DATA, calls } = makeEnv('admin', '#view=admin');
+  await wait(80);
+  assert.ok(find(byId.nav, (e) => e.tagName === 'A' && e.textContent === 'Kelola Area & Ruang' && e.className.includes(' on')).length === 1, 'menu aktif ditandai');
   assert.ok(byId.toolbar.textContent.includes('Kelola Area & Ruang') && btn(byId.toolbar, '+ Tambah area'));
   assert.ok(btn(byId.toolbar, '\u2039 Kembali ke jadwal'));
   assert.ok(byId.main.textContent.includes('Ruang Pertemuan dan Seminar'), 'kartu area tampil');
@@ -386,31 +415,138 @@ async function scenarioReport() {
   assert.ok(!/null|undefined|\[object/.test(t));
 }
 
+// memilih opsi pada <select> palsu
+function pick(select, value) {
+  select.children.filter((c) => c.tagName === 'OPTION').forEach((o) => {
+    if (String(o.attrs.value) === String(value)) o.attrs.selected = ''; else delete o.attrs.selected;
+  });
+}
+const uncheck = (el) => { delete el.attrs.checked; };
+const check = (el) => { el.attrs.checked = ''; };
+const formErr = (root) => find(root, (e) => e.className === 'ferr')[0].textContent;
+
 async function scenarioUsers() {
-  // admin: daftar + ubah peran
   let env = makeEnv('admin', '#view=users');
   await wait(80);
-  assert.ok(env.byId.toolbar.textContent.includes('Daftar Pengguna'));
-  assert.ok(env.byId.main.textContent.includes('x@y.z') && env.byId.main.textContent.includes('akun Anda'));
-  assert.ok(!find(env.byId.main, (e) => e.tagName === 'BUTTON' && e.textContent === 'Jadikan pengguna').length ||
-            true);
-  await btn(env.byId.main, 'Jadikan admin').fire('click');
-  await wait(50);
-  const call = env.calls.rpc.filter((c) => c.name === 'set_user_role')[0];
-  assert.deepStrictEqual(plain(call.args), { p_user: 'u9', p_role: 'admin' });
-  assert.ok(env.byId.msg.textContent.includes('menjadi admin') && !env.byId.msg.hidden, 'pesan sukses tidak terhapus oleh muat ulang');
+  let { byId, calls } = env;
+  assert.ok(byId.toolbar.textContent.includes('Pengguna'));
+  assert.ok(find(byId.nav, (e) => e.tagName === 'A' && e.textContent === 'Pengguna' && e.className.includes('on')).length === 1, 'menu Pengguna aktif');
+  assert.deepStrictEqual(calls.fn[0], { action: 'list' });
+  let t = byId.main.textContent;
+  assert.ok(t.includes('x@y.z') && t.includes('akun Anda') && t.includes('Nonaktif') && t.includes('Aktif'), t.slice(0, 200));
+  assert.ok(!/null|undefined|\[object/.test(t));
 
-  // admin, tetapi fungsi SQL belum dipasang -> petunjuk
+  // ---- tambah pengguna: validasi lalu berhasil
+  await btn(byId.toolbar, '+ Tambah pengguna').fire('click');
+  let form = find(byId.dlg, (e) => e.tagName === 'FORM')[0];
+  assert.ok(form && byId.dlg.textContent.includes('Tambah Pengguna'));
+  input(form, 'email').value = 'bukan-email';
+  await form.fire('submit');
+  assert.ok(formErr(byId.dlg).includes('Email tidak valid'));
+  input(form, 'email').value = 'Baru@X.id';
+  input(form, 'password').value = 'pendek';
+  await form.fire('submit');
+  assert.ok(formErr(byId.dlg).includes('minimal 8'));
+  assert.strictEqual(calls.fn.length, 1, 'validasi menahan pemanggilan fungsi');
+  await btn(form, 'Buat otomatis').fire('click');
+  const pw = input(form, 'password').value;
+  assert.strictEqual(pw.length, 12);
+  assert.ok([...pw].every((c) => L.PW_ALPHABET.includes(c)), 'password otomatis memakai alfabet aman');
+  input(form, 'display_name').value = 'Baru';
+  pick(input(form, 'role'), 'admin');
+  await form.fire('submit');
+  await wait(60);
+  assert.deepStrictEqual(calls.fn[1], { action: 'create', email: 'baru@x.id', password: pw, display_name: 'Baru', role: 'admin' });
+  assert.ok(!byId.dlg.open, 'dialog tertutup');
+  assert.ok(byId.msg.textContent.includes('baru@x.id') && !byId.msg.hidden, 'pesan sukses bertahan');
+  assert.deepStrictEqual(calls.fn[2], { action: 'list' }, 'daftar dimuat ulang');
+
+  // ---- ubah pengguna lain (baris ke-2 = Budi)
+  const editBtns = () => find(byId.main, (e) => e.tagName === 'BUTTON' && e.textContent === 'Ubah');
+  assert.strictEqual(editBtns().length, 3);
+  await editBtns()[1].fire('click');
+  form = find(byId.dlg, (e) => e.tagName === 'FORM')[0];
+  assert.ok(byId.dlg.textContent.includes('Ubah Pengguna'));
+  assert.strictEqual(input(form, 'email').attrs.value, 'x@y.z');
+  assert.ok(!input(form, 'role').attrs.disabled, 'peran pengguna lain bisa diubah');
+  await form.fire('submit');                                           // belum ada perubahan
+  assert.ok(formErr(byId.dlg).includes('Tidak ada perubahan'));
+  input(form, 'display_name').value = 'Budi B';
+  pick(input(form, 'role'), 'admin');
+  uncheck(input(form, 'active'));
+  input(form, 'password').value = 'PasswordBaru1';
+  await form.fire('submit');
+  await wait(60);
+  const upd = calls.fn.filter((c) => c.action === 'update');
+  assert.deepStrictEqual(upd[0], { action: 'update', id: 'u9', display_name: 'Budi B', role: 'admin', disabled: true, password: 'PasswordBaru1' },
+    'hanya kolom yang berubah yang dikirim (email tidak ikut)');
+
+  // ---- ubah akun sendiri: peran & status terkunci
+  await editBtns()[0].fire('click');
+  form = find(byId.dlg, (e) => e.tagName === 'FORM')[0];
+  assert.ok('disabled' in input(form, 'role').attrs && 'disabled' in input(form, 'active').attrs, 'peran dan status akun sendiri terkunci');
+  assert.ok(byId.dlg.textContent.includes('tidak bisa mengubah peran'));
+  input(form, 'display_name').value = 'Paul W';
+  await form.fire('submit');
+  await wait(60);
+  assert.deepStrictEqual(calls.fn.filter((c) => c.action === 'update')[1], { action: 'update', id: 'u1', display_name: 'Paul W' });
+
+  // ---- aktifkan kembali akun yang nonaktif (baris ke-3)
+  await editBtns()[2].fire('click');
+  form = find(byId.dlg, (e) => e.tagName === 'FORM')[0];
+  assert.ok(!('checked' in input(form, 'active').attrs), 'akun nonaktif: kotak aktif kosong');
+  check(input(form, 'active'));
+  await form.fire('submit');
+  await wait(60);
+  assert.deepStrictEqual(calls.fn.filter((c) => c.action === 'update')[2], { action: 'update', id: 'u7', disabled: false });
+
+  // ---- galat dari server ditampilkan di form, dialog tetap terbuka
+  env = makeEnv('admin', '#view=users', { fnError: 'Email sudah terdaftar' });
+  await wait(80);
+  await btn(env.byId.toolbar, '+ Tambah pengguna').fire('click');
+  form = find(env.byId.dlg, (e) => e.tagName === 'FORM')[0];
+  input(form, 'email').value = 'a@b.c';
+  input(form, 'password').value = 'Rahasia123';
+  await form.fire('submit');
+  await wait(40);
+  assert.ok(formErr(env.byId.dlg).includes('Email sudah terdaftar'));
+  assert.ok(env.byId.dlg.open, 'dialog tetap terbuka saat gagal');
+
+  // ---- fungsi belum di-deploy -> petunjuk
   env = makeEnv('admin', '#view=users', { usersFnMissing: true });
   await wait(80);
-  assert.ok(env.byId.main.textContent.includes('users.sql'), 'petunjuk memasang SQL');
+  assert.ok(env.byId.main.textContent.includes('admin-users') && env.byId.main.textContent.includes('belum dipasang'));
 
-  // pengguna biasa tidak bisa membuka halaman ini
+  // ---- pengguna biasa tidak bisa membuka halaman ini
   env = makeEnv('user', '#view=users');
   await wait(80);
   assert.ok(find(env.byId.main, (e) => e.className.startsWith('entry')).length > 0);
   assert.ok(!env.byId.main.textContent.includes('x@y.z'));
+  assert.strictEqual(env.calls.fn.length, 0, 'pengguna biasa tidak memanggil fungsi admin');
 }
+
+async function scenarioChangePassword() {
+  const { byId, calls } = makeEnv('user');
+  await wait(80);
+  await btn(byId.userbox, 'Ganti password').fire('click');
+  const form = find(byId.dlg, (e) => e.tagName === 'FORM')[0];
+  assert.ok(form && byId.dlg.textContent.includes('Ganti Password'));
+  input(form, 'new_password').value = 'pendek';
+  input(form, 'confirm_password').value = 'pendek';
+  await form.fire('submit');
+  assert.ok(formErr(byId.dlg).includes('minimal 8'));
+  input(form, 'new_password').value = 'PasswordBaru1';
+  input(form, 'confirm_password').value = 'PasswordLain2';
+  await form.fire('submit');
+  assert.ok(formErr(byId.dlg).includes('tidak sama'));
+  assert.strictEqual(calls.auth.length, 0);
+  input(form, 'confirm_password').value = 'PasswordBaru1';
+  await form.fire('submit');
+  await wait(30);
+  assert.deepStrictEqual(calls.auth[0], { password: 'PasswordBaru1' });
+  assert.ok(!byId.dlg.open && byId.msg.textContent.includes('Password diperbarui'));
+}
+
 
 (async () => {
   await scenarioUser();
@@ -420,6 +556,7 @@ async function scenarioUsers() {
   await scenarioRooms();
   await scenarioReport();
   await scenarioUsers();
+  await scenarioChangePassword();
   console.log('smoke.test.js: semua tes lulus');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -106,4 +106,28 @@ assert.strictEqual(L.csvCell('+62812'), "'+62812");
 assert.strictEqual(L.csvCell('2026-11-27'), '2026-11-27');                                // tanggal tidak diubah
 assert.strictEqual(L.csvLine(['a', 'b;c', 3]), 'a;"b;c";3');
 
+// --- password acak
+assert.strictEqual(L.PW_ALPHABET.length, 56);
+assert.ok(!/[0O1lI]/.test(L.PW_ALPHABET), 'tanpa karakter yang mudah tertukar');
+{
+  // byte >= 224 (limit) harus ditolak, bukan dipetakan (menghindari bias)
+  let calls = 0;
+  const rng = (n) => { calls++; const a = new Uint8Array(n); a.fill(250); if (calls > 1) { for (let i = 0; i < n; i++) a[i] = i; } return a; };
+  const pw = L.genPassword(12, rng);
+  assert.strictEqual(pw.length, 12);
+  assert.ok(calls >= 2, 'meminta byte lagi setelah semua byte ditolak');
+  assert.strictEqual(pw, L.PW_ALPHABET.slice(0, 12));
+}
+{
+  const nodeCrypto = require('crypto');
+  const seen = new Set();
+  for (let i = 0; i < 200; i++) {
+    const pw = L.genPassword(12, (n) => nodeCrypto.randomBytes(n));
+    assert.strictEqual(pw.length, 12);
+    assert.ok([...pw].every((c) => L.PW_ALPHABET.includes(c)));
+    seen.add(pw);
+  }
+  assert.strictEqual(seen.size, 200, 'password berbeda setiap kali');
+}
+
 console.log('lib.test.js: semua tes lulus');

@@ -5,4 +5,5 @@ cd "$(dirname "$0")/.."
 node tests/lib.test.js
 node tests/smoke.test.js
 node --experimental-strip-types --no-warnings tests/feed.test.mjs
+node --experimental-strip-types --no-warnings tests/admin_users.test.mjs
 python3 tests/test_migrate.py

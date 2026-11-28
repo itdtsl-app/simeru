@@ -121,3 +121,9 @@ table.list tfoot th { background: #d1d9de; color: #0B263B; }
   .mainnav .navitem, .mainnav .navsearch { min-height: 44px; padding: 0 14px; }
   #userbox { min-width: 0; width: 100%; border-left: 0; border-top: 1px solid #ffffff55; flex-direction: row; flex-wrap: wrap; }
 }
+
+/* ---- menu admin di menu atas, tulisan lebih besar ---- */
+.mainnav .navitem { font-size: 16px; }
+.navsearch { font-size: 15px; }
+.mainnav .navitem.push { margin-left: auto; }
+button.linkbtn { font-size: 13px; }

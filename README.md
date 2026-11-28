@@ -18,12 +18,12 @@ tests/                     -> uji otomatis (sh tests/run-all.sh)
 - **Push update realtime** (Supabase Realtime): perubahan muncul di semua browser tanpa refresh.
 - **Login** (Supabase Auth). Siapa saja boleh melihat jadwal; hanya pengguna login yang boleh menambah; ubah/hapus hanya oleh pembuat atau admin.
 - **Menu admin "Kelola Area & Ruang"** (tombol muncul di header untuk admin): tambah, ubah, nonaktifkan/aktifkan, dan hapus area serta ruangan; pindahkan ruangan ke area lain; atur jam grid dan ukuran slot per area. Menghapus menampilkan jumlah jadwal yang ikut terhapus dan meminta ketik HAPUS bila ada jadwalnya.
-- **Menu atas bergaya MRBS**: Jadwal, Ruang, Laporan, kotak Cari, dan blok pengguna (nama, Masuk/Keluar, Daftar pengguna, Kelola Area & Ruang untuk admin).
+- **Menu atas bergaya MRBS**: Jadwal, Ruang, Laporan, kotak Cari, dan di sisi kanan (khusus admin) **Kelola Area & Ruang** dan **Pengguna**; blok pengguna di ujung kanan berisi nama, Keluar, dan Ganti password.
 - **Kalender 3 bulan** (bulan sebelumnya, terpilih, berikutnya) dengan hari ini berwarna merah muda dan tanggal terpilih ditandai; klik tanggal untuk pindah hari, panah untuk geser bulan. Di layar sempit hanya bulan terpilih yang tampil.
 - **Ruang**: daftar area dan ruangan beserta kapasitas dan keterangan, dengan tautan ke jadwalnya.
 - **Cari**: cari di judul, deskripsi, dan nama pembuat (default hanya acara yang belum lewat).
 - **Laporan**: pilih rentang tanggal, area, dan ruangan; ringkasan jumlah acara dan total jam per ruangan; rincian; unduh **CSV** (pemisah titik koma, cocok untuk Excel berbahasa Indonesia; sel yang diawali `=`, `+`, `-`, `@` dinetralkan agar tidak dieksekusi sebagai rumus).
-- **Daftar pengguna** (admin): lihat akun dan ubah peran admin/pengguna. Butuh `supabase/users.sql` (opsional, jalankan sekali di SQL Editor).
+- **Pengguna** (admin): daftar akun; **tambah akun baru** (password awal bisa dibuat otomatis); **ubah** email, nama, peran, reset password, serta nonaktifkan/aktifkan akun. Butuh Edge Function `admin-users` (lihat 4b). Semua pengguna punya tombol **Ganti password**.
 - **Feed RSS dan JSON** lewat Edge Function.
 - Alamat bisa dibagikan, misalnya `.../#view=list&date=2026-11-26&area=1`.
 
@@ -61,6 +61,18 @@ supabase secrets set SITE_URL=https://<user>.github.io/<repo>/
 supabase functions deploy feed --no-verify-jwt
 ```
 Hasil: `https://<project-ref>.supabase.co/functions/v1/feed` (RSS) dan `...?format=json`. Isi alamat itu di `FEED_URL` pada `web/config.js` agar tautan muncul di tampilan Daftar.
+
+### 4b. Kelola pengguna dari aplikasi (opsional)
+Menu **Pengguna** (khusus admin) menambah dan mengubah akun. Itu memerlukan Edge Function `admin-users`, karena membuat akun butuh kunci `service_role` yang hanya boleh ada di server:
+```bash
+supabase functions deploy admin-users
+```
+- **Jangan** memakai `--no-verify-jwt` untuk fungsi ini. Selain verifikasi gateway, fungsi memeriksa sendiri bahwa pemanggilnya login **dan** berperan admin.
+- `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` disediakan otomatis oleh Supabase pada fungsi yang sudah di-deploy; jangan dimasukkan ke repo atau `config.js`.
+- Tanpa CLI: bila dashboard Supabase Anda menyediakan editor di menu **Edge Functions**, buat fungsi bernama `admin-users` dan tempel isi `supabase/functions/admin-users/index.ts`.
+- Akun baru langsung aktif (tanpa email konfirmasi). Admin memberikan password awal; pengguna dapat menggantinya lewat **Ganti password**.
+- Menonaktifkan akun menghentikan login baru; sesi yang sedang aktif berakhir dalam kira-kira satu jam. Jadwal milik akun itu tetap tersimpan.
+- Admin tidak bisa mencabut peran admin atau menonaktifkan akunnya sendiri (pengaman agar tidak terkunci).
 
 ### 5. Pindahkan data lama dari MRBS (opsional)
 ```bash
