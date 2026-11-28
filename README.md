@@ -86,7 +86,8 @@ Itu **aman untuk fungsi ini**: fungsi memeriksa sendiri setiap permintaan, yaitu
 | `Invalid JWT (HTTP 401)` | Pemeriksaan JWT bawaan platform menolak sesi | Deploy dengan `--no-verify-jwt` atau matikan *Verify JWT* di dashboard |
 | `Fungsi "admin-users" belum dipasang` | Fungsi belum di-deploy / tidak terjangkau | Jalankan perintah deploy di atas |
 | `... (HTTP 500/503)` atau `Kesalahan server: ...` | Fungsi gagal berjalan | Dashboard > Edge Functions > `admin-users` > **Logs** |
-| `Hanya admin yang boleh mengelola pengguna` | Akun Anda belum berperan admin | Jadikan admin lewat SQL (bagian 1.4 di atas) |
+| `Hanya admin yang boleh mengelola pengguna` | Akun Anda memang belum berperan admin | Jadikan admin lewat SQL (bagian 1.4 di atas) |
+| `Gagal membaca peran admin: permission denied for table profiles` | Role `service_role` belum diberi GRANT | Jalankan blok GRANT `service_role` di bagian "Jika muncul ... error 42501" |
 | `Konfigurasi fungsi belum lengkap` | Kunci rahasia tidak tersedia di lingkungan fungsi | Cek **Settings > API keys** bahwa kunci rahasia `default` ada |
 
 ### 5. Pindahkan data lama dari MRBS (opsional)
@@ -101,7 +102,15 @@ psql "<...>" -f sql_out/03_finish.sql
 Connection string ada di Supabase **Connect** (pakai *Session pooler*). Skrip melaporkan jadwal yang dilewati; jadwal lama yang bertabrakan di ruangan yang sama dilewati oleh database. Jadwal hasil impor belum terhubung ke akun, jadi hanya admin yang dapat mengubahnya.
 
 ## Jika muncul "Gagal terhubung ke Supabase: Anda tidak punya izin..." (error 42501)
-Proyek Supabase baru tidak lagi memberi hak akses otomatis pada tabel baru. Jalankan blok **3b** dari `supabase/schema.sql` (bagian GRANT) di SQL Editor, lalu muat ulang halaman dengan Ctrl+F5.
+Proyek Supabase baru tidak lagi memberi hak akses otomatis pada tabel baru (berlaku untuk role `anon`, `authenticated`, **dan `service_role`**; semua proyek lama ikut sejak 30 Oktober 2026). Jalankan blok **3b** dari `supabase/schema.sql` (bagian GRANT) di SQL Editor, lalu muat ulang halaman dengan Ctrl+F5.
+
+Bila Anda sudah menjalankan skema versi lama dan hanya menu **Pengguna** yang gagal, cukup jalankan ini:
+```sql
+grant select, insert, update, delete on public.profiles, public.areas, public.rooms, public.entries to service_role;
+grant select on public.events to service_role;
+grant usage, select on all sequences in schema public to service_role;
+grant execute on function public.is_admin() to service_role;
+```
 
 ## Keamanan: periksa sebelum dipakai
 - **Data jadwal terbaca publik** (nama acara, deskripsi, nama pembuat) oleh siapa pun yang tahu alamat situs. Itu sama dengan tampilan publik MRBS. Jika tidak boleh, ubah policy `entries_read` menjadi `to authenticated` (petunjuk di `schema.sql`); konsekuensinya feed dan layar tanpa login ikut berhenti.

@@ -93,6 +93,14 @@ async function route(req: Request): Promise<Response> {
 
   // 2) apakah dia admin?
   const prof = await admin.from("profiles").select("role").eq("id", callerId).maybeSingle();
+  if (prof.error) {
+    // jangan disamarkan sebagai "bukan admin": tampilkan penyebab sebenarnya
+    console.error("admin-users: gagal membaca profil:", prof.error);
+    const hint = prof.error.code === "42501"
+      ? " Role service_role belum diberi hak akses: jalankan GRANT untuk service_role (lihat README, bagian 4b)."
+      : "";
+    return json(500, { error: "Gagal membaca peran admin: " + prof.error.message + "." + hint });
+  }
   if (prof.data?.role !== "admin") return json(403, { error: "Hanya admin yang boleh mengelola pengguna" });
 
   let body: Record<string, any>;

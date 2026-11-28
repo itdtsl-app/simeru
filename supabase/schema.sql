@@ -147,7 +147,24 @@ create policy entries_update on public.entries for update to authenticated
 create policy entries_delete on public.entries for delete to authenticated
   using (created_by = auth.uid() or public.is_admin());
 
-grant select on public.events to anon, authenticated;
+-- ---------------------------------------------------------------------
+-- 3b. HAK AKSES UNTUK DATA API  (WAJIB di proyek Supabase baru)
+-- Sejak 30 Mei 2026, tabel baru di schema public TIDAK otomatis bisa diakses lewat
+-- API (supabase-js). Tanpa GRANT di bawah, aplikasi gagal dengan error 42501
+-- "permission denied". RLS tetap yang menentukan baris mana yang boleh dilihat/diubah.
+-- ---------------------------------------------------------------------
+grant usage on schema public to anon, authenticated;
+grant select on public.areas, public.rooms, public.entries, public.events to anon, authenticated;
+grant insert, update, delete on public.areas, public.rooms, public.entries to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+grant execute on function public.is_admin() to anon, authenticated;   -- dipakai oleh policy RLS
+
+-- service_role (dipakai Edge Function admin-users dan skrip server) JUGA butuh GRANT eksplisit.
+-- Tanpa ini fungsi gagal membaca tabel dengan "permission denied for table profiles".
+grant select, insert, update, delete on public.profiles, public.areas, public.rooms, public.entries to service_role;
+grant select on public.events to service_role;
+grant usage, select on all sequences in schema public to service_role;
+grant execute on function public.is_admin() to service_role;
 
 -- ---------------------------------------------------------------------
 -- 4. Fungsi buat jadwal (satu/banyak ruangan, berulang, lewati bentrok)

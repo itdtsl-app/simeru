@@ -1127,6 +1127,10 @@
         'Di dashboard: Edge Functions > admin-users > matikan "Verify JWT", atau deploy ulang dengan: ' +
         'supabase functions deploy admin-users --no-verify-jwt. Itu aman: fungsi ini memeriksa sendiri login dan peran admin.';
     }
+    if (/permission denied|42501/i.test(msg)) {
+      return 'Role service_role belum diberi hak akses ke tabel (Supabase tidak lagi memberikannya otomatis). ' +
+        'Jalankan di SQL Editor: grant select, insert, update, delete on public.profiles, public.areas, public.rooms, public.entries to service_role;';
+    }
     if (status !== null && status >= 500) {
       return 'Fungsi gagal berjalan di server. Buka dashboard Supabase > Edge Functions > admin-users > Logs untuk melihat penyebabnya.';
     }

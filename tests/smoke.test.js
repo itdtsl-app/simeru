@@ -532,6 +532,14 @@ async function scenarioUsers() {
   await wait(80);
   assert.ok(env.byId.main.textContent.includes('(HTTP 500)'), 'isi bukan JSON tetap menampilkan kode HTTP');
 
+  // ---- galat izin database (service_role tanpa GRANT): pesan asli + petunjuk SQL
+  env = makeEnv('admin', '#view=users', { platformError: { status: 500, body: { error: 'Gagal membaca peran admin: permission denied for table profiles. Jalankan GRANT untuk service_role.' } } });
+  await wait(80);
+  t = env.byId.main.textContent;
+  assert.ok(t.includes('permission denied for table profiles'), t.slice(0, 200));
+  assert.ok(t.includes('grant select, insert, update, delete on public.profiles') && t.includes('to service_role;'), 'petunjuk SQL ditampilkan');
+  assert.ok(!t.includes('Logs'), 'petunjuk yang lebih spesifik didahulukan');
+
   // ---- fungsi belum di-deploy -> petunjuk
   env = makeEnv('admin', '#view=users', { usersFnMissing: true });
   await wait(80);

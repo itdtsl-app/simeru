@@ -27,6 +27,7 @@ const profiles = [{ id: A, display_name: 'Paul', role: 'admin' }, { id: B, displ
 
 const seenKeys = [];
 let failAuth = false;
+let profErr = false;
 globalThis.__createClient = (url, key) => (seenKeys.push(key), {
   auth: {
     getUser: async (t) => failAuth ? (() => { throw new Error('jaringan putus'); })() : tokens[t]
@@ -51,7 +52,9 @@ globalThis.__createClient = (url, key) => (seenKeys.push(key), {
     const q = {
       select() { return q; },
       eq(c, v) { f = [c, v]; return q; },
-      maybeSingle: async () => ({ data: f && f[0] === 'id' && roles[f[1]] ? { role: roles[f[1]] } : null, error: null }),
+      maybeSingle: async () => profErr
+        ? { data: null, error: { code: '42501', message: 'permission denied for table profiles' } }
+        : ({ data: f && f[0] === 'id' && roles[f[1]] ? { role: roles[f[1]] } : null, error: null }),
       upsert: async (row, opts) => { log.upserts.push([row, opts]); return { error: null }; },
       then: (ok, ko) => Promise.resolve({ data: profiles, error: null }).then(ok, ko)
     };
@@ -172,5 +175,17 @@ failAuth = false;
 j = await res.json();
 assert.strictEqual(res.status, 500);
 assert.match(j.error, /Kesalahan server: jaringan putus/);
+
+// --- galat izin saat membaca profil TIDAK boleh disamarkan sebagai "bukan admin" (kasus service_role tanpa GRANT)
+profErr = true;
+const errSpy2 = console.error; console.error = () => {};
+res = await call({ action: 'list' });
+console.error = errSpy2;
+profErr = false;
+j = await res.json();
+assert.strictEqual(res.status, 500);
+assert.match(j.error, /permission denied for table profiles/);
+assert.match(j.error, /GRANT untuk service_role/);
+assert.ok(!/Hanya admin/.test(j.error));
 
 console.log('admin_users.test.mjs: semua tes lulus');
