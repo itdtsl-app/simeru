@@ -4,15 +4,19 @@
 // tidak pernah dikirim ke browser. Setiap permintaan diperiksa ulang: pemanggil harus login
 // DAN berperan admin di tabel profiles.
 //
-// Deploy (biarkan verifikasi JWT AKTIF, jangan pakai --no-verify-jwt):
+// Deploy:
 //   supabase functions deploy admin-users
-// Variabel SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY disediakan otomatis oleh Supabase.
+// Bila memanggil fungsi ini menghasilkan 401 "Invalid JWT" dari platform (proyek dengan kunci
+// JWT asimetris), deploy dengan:  supabase functions deploy admin-users --no-verify-jwt
+// Itu aman untuk fungsi ini: ia memeriksa sendiri sesi pemanggil ke server Auth dan perannya di tabel profiles.
+// Kunci rahasia dibaca dari SUPABASE_SECRET_KEYS (kunci baru), dengan SUPABASE_SERVICE_ROLE_KEY (lama)
+// sebagai cadangan. Keduanya disediakan otomatis oleh Supabase.
 //
 // Permintaan: POST JSON  { "action": "list" | "create" | "update", ... }
 //   list    -> { users: [{ id, email, display_name, role, created_at, last_sign_in_at, disabled }] }
 //   create  -> { email, password, display_name?, role? }
 //   update  -> { id, email?, password?, display_name?, role?, disabled? }   (hanya kolom yang dikirim yang diubah)
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -48,13 +52,36 @@ function explain(message: string): string {
   return message;
 }
 
+// Kunci rahasia: utamakan kunci baru (sb_secret_...), cadangan kunci service_role lama.
+function secretKey(): string | undefined {
+  try {
+    const keys = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") ?? "{}");
+    if (typeof keys.default === "string" && keys.default) return keys.default;
+    const first = Object.values(keys).find((v) => typeof v === "string" && v);
+    if (typeof first === "string") return first;
+  } catch (_) {
+    // SUPABASE_SECRET_KEYS bukan JSON yang valid: pakai kunci lama
+  }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || undefined;
+}
+
+// Kesalahan tak terduga dijawab sebagai JSON yang terbaca, bukan halaman galat platform
 export async function handler(req: Request): Promise<Response> {
+  try {
+    return await route(req);
+  } catch (e) {
+    console.error("admin-users:", e);
+    return json(500, { error: "Kesalahan server: " + (e instanceof Error ? e.message : String(e)) });
+  }
+}
+
+async function route(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return json(405, { error: "Gunakan metode POST" });
 
   const url = Deno.env.get("SUPABASE_URL");
-  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!url || !key) return json(500, { error: "Konfigurasi fungsi belum lengkap" });
+  const key = secretKey();
+  if (!url || !key) return json(500, { error: "Konfigurasi fungsi belum lengkap (kunci rahasia tidak ditemukan)" });
   const admin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 
   // 1) siapa yang memanggil?  (kunci anon juga lolos verifikasi gateway, jadi pemeriksaan ini wajib)

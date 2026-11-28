@@ -1102,12 +1102,35 @@
       status = ctx.status;
       try {
         var j = await ctx.json();
-        if (j && j.error) { msg = j.error; }
-      } catch (e) { /* isi respons bukan JSON: pakai pesan bawaan */ }
+        if (j && j.error) {
+          msg = String(j.error);                      // pesan dari fungsi kita: sudah ramah pengguna
+        } else if (j && (j.message || j.msg || j.code)) {
+          // pesan dari platform Supabase (mis. {"code":401,"message":"Invalid JWT"}): tampilkan apa adanya + kode HTTP
+          msg = String(j.message || j.msg || j.code) + ' (HTTP ' + status + ')';
+        } else {
+          msg += ' (HTTP ' + status + ')';
+        }
+      } catch (e) {
+        msg += ' (HTTP ' + status + ')';              // isi respons bukan JSON
+      }
     }
     // 404 dari gateway atau gagal terhubung = fungsi belum di-deploy
     var notDeployed = status === 404 || res.error.name === 'FunctionsFetchError';
-    return { error: { message: msg, status: status, notDeployed: notDeployed } };
+    return { error: { message: msg, status: status, notDeployed: notDeployed, hint: adminHint(status, msg, notDeployed) } };
+  }
+
+  // Petunjuk perbaikan sesuai jenis galat
+  function adminHint(status, msg, notDeployed) {
+    if (notDeployed) { return ''; }
+    if (status === 401 && /jwt|token|authorization/i.test(msg)) {
+      return 'Verifikasi JWT bawaan Supabase menolak sesi Anda (umum pada proyek dengan kunci JWT baru). ' +
+        'Di dashboard: Edge Functions > admin-users > matikan "Verify JWT", atau deploy ulang dengan: ' +
+        'supabase functions deploy admin-users --no-verify-jwt. Itu aman: fungsi ini memeriksa sendiri login dan peran admin.';
+    }
+    if (status !== null && status >= 500) {
+      return 'Fungsi gagal berjalan di server. Buka dashboard Supabase > Edge Functions > admin-users > Logs untuk melihat penyebabnya.';
+    }
+    return '';
   }
 
   function randomBytes(n) {
@@ -1130,7 +1153,8 @@
       main.replaceChildren(h('div', { class: 'notice' }, res.error.notDeployed
         ? [h('p', null, 'Fungsi "admin-users" belum dipasang di Supabase (atau tidak bisa dijangkau).'),
            h('p', null, 'Pasang dengan: supabase functions deploy admin-users. Langkah lengkap ada di README, bagian "Kelola pengguna".')]
-        : 'Gagal memuat daftar pengguna: ' + res.error.message));
+        : [h('p', null, 'Gagal memuat daftar pengguna: ' + res.error.message),
+           res.error.hint ? h('p', { class: 'muted' }, res.error.hint) : null]));
       return;
     }
     clearErr();
@@ -1198,7 +1222,7 @@
       saveBtn.disabled = true;
       try {
         var res = await callAdmin(body);
-        if (res.error) { fail(res.error.message); return; }
+        if (res.error) { fail(res.error.message + (res.error.hint ? '\n\n' + res.error.hint : '')); return; }
         closeDialog();
         showMsg(editing ? 'Pengguna diperbarui.' : 'Pengguna ' + em + ' dibuat.', true);
         if (isMe) { await loadProfile(); renderHeader(); }

@@ -25,9 +25,11 @@ const users = [
 ];
 const profiles = [{ id: A, display_name: 'Paul', role: 'admin' }, { id: B, display_name: 'Budi', role: 'user' }];
 
-globalThis.__createClient = () => ({
+const seenKeys = [];
+let failAuth = false;
+globalThis.__createClient = (url, key) => (seenKeys.push(key), {
   auth: {
-    getUser: async (t) => tokens[t]
+    getUser: async (t) => failAuth ? (() => { throw new Error('jaringan putus'); })() : tokens[t]
       ? { data: { user: tokens[t] }, error: null }
       : { data: { user: null }, error: { message: 'invalid JWT' } },
     admin: {
@@ -56,10 +58,8 @@ globalThis.__createClient = () => ({
     return q;
   }
 });
-globalThis.Deno = {
-  env: { get: (k) => ({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'service' })[k] },
-  serve() {}
-};
+const ENV = { SUPABASE_URL: 'https://x.supabase.co', SUPABASE_SECRET_KEYS: '{"default":"sb_secret_baru","lain":"sb_secret_lain"}', SUPABASE_SERVICE_ROLE_KEY: 'service_lama' };
+globalThis.Deno = { env: { get: (k) => ENV[k] }, serve() {} };
 const { handler } = await import(pathToFileURL(tmp).href);
 
 const call = (body, token = 't-admin', raw) => handler(new Request('https://x/admin-users', {
@@ -145,5 +145,32 @@ reset();
 await call({ action: 'update', id: A, display_name: 'Paul W', role: 'admin' });      // mengubah diri sendiri yang aman
 assert.deepStrictEqual(log.upserts[0][0], { id: A, display_name: 'Paul W', role: 'admin' });
 await expectErr(await call({ action: 'update', id: NEW, role: 'user', password: 'Rahasia123' }), 400, /Pengguna tidak ditemukan/);
+
+// --- pemilihan kunci rahasia (baru lebih diutamakan, lama sebagai cadangan)
+seenKeys.length = 0;
+await call({ action: 'list' });
+assert.strictEqual(seenKeys[0], 'sb_secret_baru', 'kunci baru "default" dipakai lebih dulu');
+ENV.SUPABASE_SECRET_KEYS = '{"hanya":"sb_secret_hanya"}';
+seenKeys.length = 0; await call({ action: 'list' });
+assert.strictEqual(seenKeys[0], 'sb_secret_hanya', 'tanpa "default": pakai kunci bernama pertama');
+ENV.SUPABASE_SECRET_KEYS = 'bukan-json';
+seenKeys.length = 0; await call({ action: 'list' });
+assert.strictEqual(seenKeys[0], 'service_lama', 'JSON rusak: pakai kunci lama');
+delete ENV.SUPABASE_SECRET_KEYS;
+seenKeys.length = 0; await call({ action: 'list' });
+assert.strictEqual(seenKeys[0], 'service_lama', 'tanpa kunci baru: pakai kunci lama');
+delete ENV.SUPABASE_SERVICE_ROLE_KEY;
+await expectErr(await call({ action: 'list' }), 500, /kunci rahasia tidak ditemukan/);
+ENV.SUPABASE_SERVICE_ROLE_KEY = 'service_lama';
+
+// --- kesalahan tak terduga menjadi JSON yang terbaca (bukan halaman galat platform)
+failAuth = true;
+const errSpy = console.error; console.error = () => {};
+res = await call({ action: 'list' });
+console.error = errSpy;
+failAuth = false;
+j = await res.json();
+assert.strictEqual(res.status, 500);
+assert.match(j.error, /Kesalahan server: jaringan putus/);
 
 console.log('admin_users.test.mjs: semua tes lulus');

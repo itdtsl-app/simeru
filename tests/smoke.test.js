@@ -136,6 +136,11 @@ function makeEnv(role, hash, opts) {
           return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code',
             context: { status: 404, json: async () => ({ code: 'NOT_FOUND', message: 'Requested function was not found' }) } } };
         }
+        if (opts.platformError) {
+          const pe = opts.platformError;
+          return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code',
+            context: { status: pe.status, json: async () => pe.body } } };
+        }
         if (opts.fnError && body.action !== 'list') {
           return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code',
             context: { status: 400, json: async () => ({ error: opts.fnError }) } } };
@@ -511,6 +516,21 @@ async function scenarioUsers() {
   await wait(40);
   assert.ok(formErr(env.byId.dlg).includes('Email sudah terdaftar'));
   assert.ok(env.byId.dlg.open, 'dialog tetap terbuka saat gagal');
+
+  // ---- galat dari platform Supabase: tampilkan pesan aslinya + kode HTTP + petunjuk (bukan pesan umum)
+  env = makeEnv('admin', '#view=users', { platformError: { status: 401, body: { code: 401, message: 'Invalid JWT' } } });
+  await wait(80);
+  t = env.byId.main.textContent;
+  assert.ok(t.includes('Invalid JWT (HTTP 401)'), t.slice(0, 200));
+  assert.ok(!t.includes('non-2xx'), 'pesan umum yang tidak informatif tidak ditampilkan');
+  assert.ok(t.includes('Verify JWT') && t.includes('--no-verify-jwt'), 'petunjuk untuk galat 401 JWT');
+  env = makeEnv('admin', '#view=users', { platformError: { status: 503, body: { code: 'BOOT_ERROR', message: 'Function failed to start (please check logs)' } } });
+  await wait(80);
+  t = env.byId.main.textContent;
+  assert.ok(t.includes('Function failed to start (please check logs) (HTTP 503)') && t.includes('Logs'), t.slice(0, 200));
+  env = makeEnv('admin', '#view=users', { platformError: { status: 500, body: 'bukan json' } });
+  await wait(80);
+  assert.ok(env.byId.main.textContent.includes('(HTTP 500)'), 'isi bukan JSON tetap menampilkan kode HTTP');
 
   // ---- fungsi belum di-deploy -> petunjuk
   env = makeEnv('admin', '#view=users', { usersFnMissing: true });

@@ -63,16 +63,31 @@ supabase functions deploy feed --no-verify-jwt
 Hasil: `https://<project-ref>.supabase.co/functions/v1/feed` (RSS) dan `...?format=json`. Isi alamat itu di `FEED_URL` pada `web/config.js` agar tautan muncul di tampilan Daftar.
 
 ### 4b. Kelola pengguna dari aplikasi (opsional)
-Menu **Pengguna** (khusus admin) menambah dan mengubah akun. Itu memerlukan Edge Function `admin-users`, karena membuat akun butuh kunci `service_role` yang hanya boleh ada di server:
+Menu **Pengguna** (khusus admin) menambah dan mengubah akun. Itu memerlukan Edge Function `admin-users`, karena membuat akun butuh kunci rahasia yang hanya boleh ada di server:
 ```bash
 supabase functions deploy admin-users
 ```
-- **Jangan** memakai `--no-verify-jwt` untuk fungsi ini. Selain verifikasi gateway, fungsi memeriksa sendiri bahwa pemanggilnya login **dan** berperan admin.
-- `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` disediakan otomatis oleh Supabase pada fungsi yang sudah di-deploy; jangan dimasukkan ke repo atau `config.js`.
-- Tanpa CLI: bila dashboard Supabase Anda menyediakan editor di menu **Edge Functions**, buat fungsi bernama `admin-users` dan tempel isi `supabase/functions/admin-users/index.ts`.
+Bila halaman Pengguna menampilkan **"Invalid JWT (HTTP 401)"** (umum pada proyek yang memakai kunci JWT baru), deploy dengan verifikasi bawaan platform dimatikan:
+```bash
+supabase functions deploy admin-users --no-verify-jwt
+```
+Itu **aman untuk fungsi ini**: fungsi memeriksa sendiri setiap permintaan, yaitu sesi pemanggil divalidasi ke server Auth dan perannya harus `admin` di tabel `profiles`. Permintaan tanpa login, dengan kunci anon, atau dari akun biasa ditolak (diuji otomatis). Alternatif tanpa CLI: dashboard Supabase > Edge Functions > `admin-users` > matikan **Verify JWT**.
+
+- Kunci rahasia dibaca otomatis dari `SUPABASE_SECRET_KEYS` (kunci baru), dengan `SUPABASE_SERVICE_ROLE_KEY` (lama) sebagai cadangan. Jangan memasukkannya ke repo atau `config.js`.
+- Tanpa CLI: bila dashboard menyediakan editor di menu **Edge Functions**, buat fungsi `admin-users` dan tempel isi `supabase/functions/admin-users/index.ts`.
 - Akun baru langsung aktif (tanpa email konfirmasi). Admin memberikan password awal; pengguna dapat menggantinya lewat **Ganti password**.
 - Menonaktifkan akun menghentikan login baru; sesi yang sedang aktif berakhir dalam kira-kira satu jam. Jadwal milik akun itu tetap tersimpan.
-- Admin tidak bisa mencabut peran admin atau menonaktifkan akunnya sendiri (pengaman agar tidak terkunci).
+- Admin tidak bisa mencabut peran admin atau menonaktifkan akunnya sendiri.
+
+**Pemecahan masalah** (pesan di halaman Pengguna sekarang menampilkan penyebab sebenarnya):
+
+| Pesan | Artinya | Tindakan |
+|---|---|---|
+| `Invalid JWT (HTTP 401)` | Pemeriksaan JWT bawaan platform menolak sesi | Deploy dengan `--no-verify-jwt` atau matikan *Verify JWT* di dashboard |
+| `Fungsi "admin-users" belum dipasang` | Fungsi belum di-deploy / tidak terjangkau | Jalankan perintah deploy di atas |
+| `... (HTTP 500/503)` atau `Kesalahan server: ...` | Fungsi gagal berjalan | Dashboard > Edge Functions > `admin-users` > **Logs** |
+| `Hanya admin yang boleh mengelola pengguna` | Akun Anda belum berperan admin | Jadikan admin lewat SQL (bagian 1.4 di atas) |
+| `Konfigurasi fungsi belum lengkap` | Kunci rahasia tidak tersedia di lingkungan fungsi | Cek **Settings > API keys** bahwa kunci rahasia `default` ada |
 
 ### 5. Pindahkan data lama dari MRBS (opsional)
 ```bash
